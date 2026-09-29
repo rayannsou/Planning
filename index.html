@@ -271,6 +271,12 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
 .dayrow.today{border-left-color:var(--accent)}
 .card>h2{color:var(--accent)}
 .tabs button[aria-selected=true]{color:var(--accent)}
+.dnote{font-size:13px;color:var(--ink);background:var(--accent-soft);border-radius:8px;padding:6px 10px}
+.dnote b{font-weight:600}
+.notelist{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none}
+.cwr.empty{flex-direction:row;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:8px 12px}
+.cwr.empty select{flex:1 1 180px;max-width:280px;min-height:40px}
+.cwr input[type=text]{min-height:40px}
 </style>
 
 <div class="wrap">
@@ -344,7 +350,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
       <div class="col">
         <div class="card">
           <h2>Créer le planning d’une semaine</h2>
-          <p class="hint">Choisissez la semaine, puis ouvrez chaque poste (échographie, scanner…) : la trame est déjà appliquée, il ne reste qu’à changer les médecins. Pour une vacation qui n’existe pas dans la trame, utilisez le formulaire en bas.</p>
+          <p class="hint">Choisissez la semaine, puis ouvrez chaque poste (échographie, scanner…) et choisissez les médecins jour par jour dans les menus. Le plus rapide : importer le fichier Excel du planning du mois ci-dessous.</p>
           <div class="weekbar">
             <button type="button" id="cwPrev" aria-label="Semaine précédente">‹</button>
             <h2 id="cwLabel"></h2>
@@ -352,11 +358,11 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
           </div>
           <div class="f jump"><label for="cwJump">Aller à une semaine</label><input type="date" id="cwJump"></div>
           <p id="cwStatus" class="hint"></p>
-          <fieldset data-edit id="cwSet"><button type="button" class="ghost" id="cwReset">Remettre la semaine comme la trame</button></fieldset>
+          <fieldset data-edit id="cwSet"><button type="button" class="ghost" id="cwReset">Vider les vacations de la semaine</button></fieldset>
         </div>
         <div class="card" id="cwImport">
-          <h2>Importer un fichier Excel</h2>
-          <p class="hint">Un tableau avec les postes en lignes et, en colonnes, les jours (lundi à vendredi) avec Matin / Après-midi. Dans chaque case, les initiales ou noms des médecins séparés par une virgule. Les médecins inconnus sont ajoutés à la liste. Le plus simple : téléchargez le modèle, remplissez-le, puis importez-le.</p>
+          <h2>Importer le planning Excel</h2>
+          <p class="hint">Importez le fichier du service (une feuille par semaine : postes, congés, absences, astreintes, notes). Toutes les semaines du fichier sont créées d’un coup et les médecins inconnus sont ajoutés à la liste. Un tableau simple (postes en lignes, jours en colonnes) est aussi accepté.</p>
           <fieldset data-edit id="xlSet">
             <label class="filebtn primary" for="xlFile">Choisir un fichier Excel…</label>
             <input type="file" id="xlFile" accept=".xlsx,.xls,.csv" class="visually-hidden">
@@ -367,8 +373,8 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
         <div id="cwAlert" class="alert" role="alert" hidden></div>
         <div id="cwPostes" class="col"></div>
         <form id="cwExcep" class="card" onsubmit="return false">
-          <h2>Ajouter une vacation exceptionnelle</h2>
-          <p class="hint">Par exemple « scanner RDC le mardi matin ». Elle n’existe que pour ce jour et apparaît dans tous les plannings.</p>
+          <h2>Ajout rapide d’une vacation</h2>
+          <p class="hint">Choisissez le poste, le jour, le créneau et le médecin. Vous pouvez aussi remplir directement les postes ci-dessus.</p>
           <fieldset data-edit id="cxSet">
             <div class="row3">
               <div class="f"><label for="cxPoste">Poste</label><select id="cxPoste"></select></div>
@@ -457,6 +463,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
             <li>Les échanges enregistrés sont déjà appliqués</li>
             <li>Touchez une case pour modifier qui est affecté</li>
           </ul>
+          <div id="gNotes" class="card" hidden></div>
           <form id="edForm" class="card" onsubmit="return false">
             <h2>Modifier une vacation</h2>
             <p class="hint">Touchez une case du tableau ou choisissez ci-dessous. Le changement vaut pour ce jour seulement : la trame de la semaine type ne bouge pas.</p>
@@ -470,7 +477,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
               <div id="edWho" class="col" style="gap:8px"></div>
               <div class="f"><label for="edAdd">Ajouter un médecin</label><select id="edAdd"></select></div>
               <div id="edMsg" class="alert" role="alert" hidden></div>
-              <button type="button" class="ghost" id="edRevert" hidden>Revenir à la trame</button>
+              <button type="button" class="ghost" id="edRevert" hidden>Effacer cette vacation</button>
             </fieldset>
           </form>
         </div>
@@ -527,6 +534,156 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+/* Lecture du planning mensuel du service (une feuille par semaine). Sans dépendance : reçoit la bibliothèque XLSX. */
+(function (root) {
+  const POSTES = [
+    {id:'interp-urg', label:'Interprétation radio Libourne urgences', info:true},
+    {id:'interp-ext', label:'Interprétation radio Libourne externes', info:true},
+    {id:'blaye', label:'Déplacement Blaye', journee:true},
+    {id:'stefoy', label:'Déplacement Ste Foy', journee:true},
+    {id:'scanner', label:'Scanner Libourne / Blaye / Ste Foy + radios Ste Foy'},
+    {id:'scanner-interv', label:'Interventionnel scanner'},
+    {id:'irm1', label:'IRM 1 + radio urgences'},
+    {id:'irm2', label:'IRM 2 + radio externes'},
+    {id:'irm-blaye', label:'IRM Blaye', journee:true},
+    {id:'irm-3t', label:'IRM 3 T', journee:true},
+    {id:'salle-interv', label:'Salle interventionnel'},
+    {id:'echo1', label:'Échographie 1'},
+    {id:'echo2', label:'Échographie 2'},
+    {id:'mammo', label:'Mammographie'},
+    {id:'astreinte', label:'Astreinte', journee:true}
+  ];
+  const MOIS = ['janvier','fevrier','mars','avril','mai','juin','juillet','aout','septembre','octobre','novembre','decembre'];
+  const JOURS = ['lundi','mardi','mercredi','jeudi','vendredi'];
+  const norm = s => String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+  const pad = n => String(n).padStart(2,'0');
+  const ymd = d => d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+  const KNOWN = {'clara b':'Clara B','clara m':'Clara M','heloise':'Héloïse','chloe':'Chloé','rayann':'Rayann','jennifer':'Jennifer','eric':'Eric'};
+
+  function personLabel(raw){
+    let t = String(raw).replace(/\*/g,'').replace(/\s+/g,' ').trim().replace(/\.$/,'');
+    let n = norm(t).replace(/\./g,'').replace(/ v$/,'').trim();
+    if (KNOWN[n]) return KNOWN[n];
+    if (/^[A-Za-zÀ-ÿ]{2,3}$/.test(t)) return t.toUpperCase();
+    return t.toLowerCase().replace(/(^|[\s-])([a-zà-ÿ])/g,(m,a,b)=>a+b.toUpperCase());
+  }
+  function posteFor(label){
+    const n = norm(label);
+    if (n.startsWith('interpretation radio libourne urgences')) return 'interp-urg';
+    if (n.startsWith('interpretation radio libourne externes')) return 'interp-ext';
+    if (n.startsWith('deplacement blaye')) return 'blaye';
+    if (n.startsWith('deplacement ste foy')) return 'stefoy';
+    if (n.startsWith('scanner')) return 'scanner';
+    if (n.startsWith('interventionnel scanner')) return 'scanner-interv';
+    if (/^irm 1/.test(n)) return 'irm1';
+    if (/^irm 2/.test(n)) return 'irm2';
+    if (n.startsWith('irm blaye')) return 'irm-blaye';
+    if (/^irm\s*:?\s*3/.test(n)) return 'irm-3t';
+    if (n.startsWith('salle')) return 'salle-interv';
+    if (/^echographie 1/.test(n)) return 'echo1';
+    if (/^echographie 2/.test(n)) return 'echo2';
+    if (n.startsWith('mammographie')) return 'mammo';
+    if (n.startsWith('astreinte')) return 'astreinte';
+    return null;
+  }
+  const isText = tok => { const n = norm(tok); return n.startsWith('maintenance') || /\d/.test(n) || n.length > 18; };
+
+  function parseSheet(X, ws){
+    if (!ws || !ws['!ref']) return null;
+    const rg = X.utils.decode_range(ws['!ref']);
+    const merges = {}; (ws['!merges'] || []).forEach(m=>{ merges[m.s.r+','+m.s.c] = m; });
+    const cellStr = (r,c)=>{ const x = ws[X.utils.encode_cell({r,c})]; return x && x.v != null ? String(x.v).trim() : ''; };
+    /* semaine */
+    let monday = null;
+    const title = cellStr(0,0) || cellStr(1,0);
+    const mt = norm(title).match(/semaine du (\d{1,2})(?:er)? ([a-z]+)(?: (\d{4}))?/);
+    if (mt) { const mi = MOIS.indexOf(mt[2]); if (mi >= 0) monday = new Date(Number(mt[3] || new Date().getFullYear()), mi, Number(mt[1])); }
+    /* colonnes des jours */
+    let hr = -1; const start = [];
+    for (let r=rg.s.r; r<=Math.min(rg.e.r, rg.s.r+8) && hr < 0; r++) {
+      const found = {};
+      for (let c=rg.s.c; c<=rg.e.c; c++) { const n = norm(cellStr(r,c)); const i = JOURS.findIndex(j=>n.startsWith(j)); if (i >= 0 && found[i] === undefined) found[i] = c; }
+      if (Object.keys(found).length >= 3) { hr = r; Object.keys(found).forEach(i=>{ start[Number(i)] = found[i]; }); }
+    }
+    if (hr < 0 || !monday) return null;
+    const dayPart = c=>{ let d = -1; for (let i=0;i<5;i++) if (start[i] !== undefined && start[i] <= c) d = i; if (d < 0 || (start[d+1] === undefined && c > start[d]+1)) return null; if (start[d+1] !== undefined && c >= start[d+1]) return null; return {d, part: c === start[d] ? 'M' : 'AM'}; };
+    const firstCol = Math.min(...start.filter(x=>x !== undefined));
+    const covered = (r,c)=>{ const m = merges[r+','+c]; const out = []; const ec = m ? m.e.c : c; for (let cc=c; cc<=ec; cc++) { const dp = dayPart(cc); if (dp) out.push(dp); } return out; };
+    const dates = [...Array(5)].map((_,i)=>ymd(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate()+i)));
+
+    const cells = {}, absences = [], notes = [];
+    const addCell = (poste, d, part, people, x)=>{
+      const k = poste+'|'+d+'|'+part; const o = cells[k] || (cells[k] = {poste, date: dates[d], part, people: [], x: ''});
+      people.forEach(p=>{ const e = o.people.find(q=>q.label === p.label); if (e) e.star = e.star || p.star; else o.people.push(p); });
+      if (x) o.x = o.x ? o.x+' · '+x : x;
+    };
+    const addNote = (d, text)=>{ if (!text) return; if (!notes.some(n=>n.date === dates[d] && n.text === text)) notes.push({date: dates[d], text}); };
+    let cur = null, state = 'postes', person = null;
+    for (let r=hr+2; r<=rg.e.r; r++) {
+      const lab = norm(cellStr(r,0)).replace(/^\s+/,'');
+      if (lab) {
+        if (lab === 'note') { state = 'note'; cur = null; }
+        else if (lab.startsWith('absence')) { state = 'abs'; person = personLabel(cellStr(r,0).replace(/^[^:]*:/,'')); }
+        else if (lab.startsWith('astreinte')) { state = 'postes'; cur = 'astreinte'; }
+        else if (state === 'abs' && !posteFor(lab)) { person = personLabel(cellStr(r,0)); }
+        else if (lab === '+' || lab.startsWith('radios ste foy')) { /* suite du bloc scanner */ }
+        else { const p = posteFor(lab); if (p) { state = 'postes'; cur = p; } }
+      }
+      for (let c=firstCol; c<=rg.e.c; c++) {
+        const v = cellStr(r,c); if (!v) continue;
+        const cov = covered(r,c); if (!cov.length) continue;
+        if (state === 'postes' && cur) {
+          const def = POSTES.find(p=>p.id === cur);
+          const parts = [];
+          cov.forEach(dp=>{ if (def.journee) { parts.push({d:dp.d, part:'M'}, {d:dp.d, part:'AM'}); } else parts.push(dp); });
+          if (def.info) { parts.forEach(dp=>addCell(cur, dp.d, dp.part, [], v)); continue; }
+          const people = [], texts = [];
+          v.split(/[\/;\n]/).forEach(tok=>{
+            let t = tok.trim().replace(/^\+\s*/,''); if (!t) return;
+            const star = t.indexOf('*') >= 0; t = t.replace(/\*/g,'').trim(); if (!t) return;
+            if (isText(t)) texts.push(t); else people.push({label: personLabel(t), star});
+          });
+          parts.forEach(dp=>addCell(cur, dp.d, dp.part, people, texts.join(' · ')));
+        } else if (state === 'abs' && !lab && r > 0 && !person) {
+          /* rien */
+        } else if (state === 'abs') {
+          if (lab || !cellStr(r,0)) {
+            const isConges = !lab && !/^x/i.test(v) ? true : false;
+            if (!lab && !/^x/i.test(v)) {
+              /* ligne des congés du jour : initiales séparées par / */
+              v.split('/').forEach(tok=>{
+                let t = tok.trim(); if (!t) return;
+                const mat = /\((mat|matin)\)/i.test(t), apm = /\((apm|ap|apres.?midi)\)/i.test(t);
+                t = t.replace(/\(.*?\)/g,'').trim(); if (!t) return;
+                cov.forEach(dp=>{ if (mat && dp.part !== 'M') return; if (apm && dp.part !== 'AM') return; absences.push({label: personLabel(t), date: dates[dp.d], part: dp.part, note: 'Congés'}); });
+              });
+            } else if (/^conges/i.test(norm(v))) {
+              for (let d=0; d<5; d++) ['M','AM'].forEach(part=>absences.push({label: person, date: dates[d], part, note: 'Congés'}));
+            } else {
+              const note = /cours/i.test(v) ? 'Cours' : 'Absent';
+              cov.forEach(dp=>absences.push({label: person, date: dates[dp.d], part: dp.part, note}));
+            }
+          }
+        } else if (state === 'note' || state === 'tail') {
+          cov.slice(0,1).forEach(dp=>addNote(dp.d, v));
+        }
+      }
+      if (lab.startsWith('astreinte')) { state = 'tail'; cur = null; }
+    }
+    return {monday: ymd(monday), dates, cells: Object.values(cells), absences, notes};
+  }
+
+  function parseWorkbook(X, wb){
+    const weeks = [];
+    wb.SheetNames.forEach(n=>{ const w = parseSheet(X, wb.Sheets[n]); if (w) weeks.push(w); });
+    weeks.sort((a,b)=>a.monday < b.monday ? -1 : 1);
+    return weeks;
+  }
+  root.PlanningParser = {POSTES, parseSheet, parseWorkbook, personLabel, norm};
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
 <script>
 (function(){
   const $ = s => document.querySelector(s);
@@ -714,10 +871,20 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
       return '<b>'+(part === 'M' ? 'MATIN' : 'APRÈS-MIDI')+'</b><span>'+(vs.length ? vs.map(v=>esc(postName(v.poste,tk))+(v.others.length ? ' <span class="muted">avec '+esc(v.others.map(dLabel).join(', '))+'</span>' : '')).join(' + ') : st ? '<span class="muted">'+STAT[st][1]+'</span>' : '<span class="muted">Pas de vacation</span>')+'</span>';
     };
     h += '<div class="card"><h2>'+(key(addDays(now,1)) === tk ? 'Demain' : 'Prochain jour')+' · '+esc(fmtShort.format(t))+'</h2><div class="tom">'+line('M')+line('AM')+'</div></div>';
+    const nt = dayNotes(k).concat(dayNotes(tk).map(x=>'Demain : '+x));
+    if (nt.length) h += '<div class="card"><h2>Notes du service</h2><ul class="notelist">'+nt.map(t=>'<li class="dnote">'+esc(t)+'</li>').join('')+'</ul></div>';
     /* alerte de conflit */
     const cf = myVacations(me).filter(v=>v.date >= k && reasonFor(me,v.date,v.part)).length;
     if (cf) h += '<div class="alert">⚠ '+cf+' vacation'+(cf > 1 ? 's' : '')+' à venir tomb'+(cf > 1 ? 'ent' : 'e')+' sur vos indisponibilités : voir « Mon planning ».</div>';
     box.innerHTML = h;
+  }
+
+  const dayNotes = k => (notesBy[k] || []);
+  function renderGNotes(){
+    const box = $('#gNotes');
+    const items = [...Array(5)].map((_,i)=>({d: addDays(weekStart,i)})).map(x=>({d: x.d, n: dayNotes(key(x.d))})).filter(x=>x.n.length);
+    box.hidden = !items.length;
+    box.innerHTML = items.length ? '<h2>Notes de la semaine</h2><ul class="notelist">'+items.map(x=>x.n.map(t=>'<li class="dnote"><b>'+esc(fmtShort.format(x.d))+'</b> · '+esc(t)+'</li>').join('')).join('')+'</ul>' : '';
   }
 
   function renderTeam(){
@@ -899,7 +1066,8 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
   const posteColor = id => { const i = trame ? trame.postes.findIndex(p=>p.id === id) : -1; return PCOL[(i < 0 ? 0 : i) % PCOL.length]; };
   const docStyle = id => { let h = 0; for (const ch of String(id)) h = (h*31 + ch.charCodeAt(0)) % 360; return 'background:hsl('+h+' 70% 89%);color:hsl('+h+' 60% 20%)'; };
   const chipSty = (id, extra) => (id !== me && !extra) ? ' style="'+docStyle(id)+'"' : '';
-  let gDay = -1, overrides = {}, ed = {poste:'', date:'', part:'M'}; const oChains = {};
+  const SEED = {"weeks":[{"monday":"2026-09-28","dates":["2026-09-28","2026-09-29","2026-09-30","2026-10-01","2026-10-02"],"cells":[{"poste":"interp-urg","date":"2026-09-28","part":"M","people":[],"x":"SCAN/IRM (V/S)"},{"poste":"interp-urg","date":"2026-09-28","part":"AM","people":[],"x":"IRM (D)"},{"poste":"interp-urg","date":"2026-09-29","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-09-29","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-09-30","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-09-30","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-01","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-01","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-02","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-02","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-ext","date":"2026-09-28","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-09-28","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-09-29","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-09-29","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-09-30","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-09-30","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-01","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-01","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-02","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-02","part":"AM","people":[],"x":"IRM 2"},{"poste":"blaye","date":"2026-09-28","part":"M","people":[{"label":"SG","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"blaye","date":"2026-09-28","part":"AM","people":[{"label":"SG","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"blaye","date":"2026-09-29","part":"M","people":[{"label":"Clara B","star":false},{"label":"LH","star":false}],"x":""},{"poste":"blaye","date":"2026-09-29","part":"AM","people":[{"label":"Clara B","star":false},{"label":"LH","star":false}],"x":""},{"poste":"blaye","date":"2026-09-30","part":"M","people":[{"label":"EB","star":false},{"label":"AYG","star":false}],"x":""},{"poste":"blaye","date":"2026-09-30","part":"AM","people":[{"label":"EB","star":false},{"label":"AYG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-01","part":"M","people":[{"label":"AG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-01","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-02","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"blaye","date":"2026-10-02","part":"AM","people":[{"label":"MDP","star":false}],"x":""},{"poste":"stefoy","date":"2026-09-28","part":"M","people":[{"label":"TT","star":false}],"x":""},{"poste":"stefoy","date":"2026-09-28","part":"AM","people":[{"label":"TT","star":false}],"x":""},{"poste":"stefoy","date":"2026-09-29","part":"M","people":[{"label":"KS","star":false}],"x":""},{"poste":"stefoy","date":"2026-09-29","part":"AM","people":[{"label":"KS","star":false}],"x":""},{"poste":"stefoy","date":"2026-09-30","part":"M","people":[{"label":"SB","star":false}],"x":""},{"poste":"stefoy","date":"2026-09-30","part":"AM","people":[{"label":"SB","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-01","part":"M","people":[{"label":"JR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-01","part":"AM","people":[{"label":"JR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-02","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-02","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"scanner","date":"2026-09-28","part":"M","people":[{"label":"JR","star":false},{"label":"EB","star":false},{"label":"LH","star":true},{"label":"Rayann","star":false}],"x":""},{"poste":"scanner","date":"2026-09-28","part":"AM","people":[{"label":"MDP","star":false},{"label":"JB","star":false},{"label":"LH","star":true},{"label":"Clara B","star":false}],"x":""},{"poste":"scanner","date":"2026-09-29","part":"M","people":[{"label":"JB","star":false},{"label":"TT","star":false},{"label":"LM","star":true},{"label":"Clara M","star":false}],"x":""},{"poste":"scanner","date":"2026-09-29","part":"AM","people":[{"label":"BM","star":false},{"label":"LOM","star":false},{"label":"AG","star":false},{"label":"LM","star":true}],"x":""},{"poste":"scanner","date":"2026-09-30","part":"M","people":[{"label":"AG","star":false},{"label":"BM","star":false},{"label":"TT","star":true},{"label":"Rayann","star":false}],"x":""},{"poste":"scanner","date":"2026-09-30","part":"AM","people":[{"label":"LOM","star":false},{"label":"BM","star":false},{"label":"TT","star":true},{"label":"Rayann","star":false}],"x":""},{"poste":"scanner","date":"2026-10-01","part":"M","people":[{"label":"SG","star":false},{"label":"AYG","star":false},{"label":"JB","star":true},{"label":"Clara M","star":false}],"x":""},{"poste":"scanner","date":"2026-10-01","part":"AM","people":[{"label":"LH","star":false},{"label":"SG","star":false},{"label":"JB","star":true},{"label":"AXC","star":true},{"label":"Héloïse","star":false}],"x":""},{"poste":"scanner","date":"2026-10-02","part":"M","people":[{"label":"SB","star":false},{"label":"TT","star":false},{"label":"LH","star":false}],"x":""},{"poste":"scanner","date":"2026-10-02","part":"AM","people":[{"label":"EB","star":false},{"label":"JB","star":false},{"label":"KS","star":false}],"x":""},{"poste":"scanner-interv","date":"2026-09-29","part":"M","people":[{"label":"AYG","star":false}],"x":""},{"poste":"scanner-interv","date":"2026-09-30","part":"M","people":[{"label":"JR","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"irm1","date":"2026-09-28","part":"M","people":[{"label":"LM","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"irm1","date":"2026-09-28","part":"AM","people":[{"label":"BM","star":false}],"x":""},{"poste":"irm1","date":"2026-09-29","part":"M","people":[{"label":"BM","star":false}],"x":""},{"poste":"irm1","date":"2026-09-29","part":"AM","people":[{"label":"AYG","star":false}],"x":""},{"poste":"irm1","date":"2026-09-30","part":"M","people":[{"label":"KS","star":false}],"x":""},{"poste":"irm1","date":"2026-09-30","part":"AM","people":[{"label":"SG","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"irm1","date":"2026-10-01","part":"M","people":[{"label":"EB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"irm1","date":"2026-10-01","part":"AM","people":[{"label":"SB","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"irm1","date":"2026-10-02","part":"M","people":[{"label":"AG","star":false}],"x":""},{"poste":"irm1","date":"2026-10-02","part":"AM","people":[{"label":"LH","star":false}],"x":""},{"poste":"irm2","date":"2026-09-28","part":"M","people":[{"label":"BM","star":false}],"x":""},{"poste":"irm2","date":"2026-09-28","part":"AM","people":[{"label":"JR","star":false}],"x":""},{"poste":"irm2","date":"2026-10-02","part":"M","people":[{"label":"JR","star":true}],"x":""},{"poste":"irm2","date":"2026-10-02","part":"AM","people":[{"label":"JR","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-09-28","part":"M","people":[{"label":"AYG","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-09-28","part":"AM","people":[{"label":"AYG","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-01","part":"M","people":[{"label":"KS","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-01","part":"AM","people":[{"label":"KS","star":true}],"x":""},{"poste":"irm-3t","date":"2026-09-28","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"irm-3t","date":"2026-09-28","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"salle-interv","date":"2026-09-28","part":"M","people":[{"label":"AXC","star":false}],"x":""},{"poste":"salle-interv","date":"2026-09-28","part":"AM","people":[{"label":"AXC","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"salle-interv","date":"2026-09-29","part":"M","people":[{"label":"AXC","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"salle-interv","date":"2026-09-29","part":"AM","people":[{"label":"AXC","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-01","part":"M","people":[{"label":"BM","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-01","part":"AM","people":[{"label":"AYG","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-02","part":"M","people":[{"label":"AXC","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-02","part":"AM","people":[{"label":"AXC","star":false}],"x":""},{"poste":"echo1","date":"2026-09-29","part":"M","people":[{"label":"LOM","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo1","date":"2026-09-29","part":"AM","people":[{"label":"TT","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo1","date":"2026-09-30","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"echo1","date":"2026-09-30","part":"AM","people":[{"label":"KS","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo1","date":"2026-10-01","part":"M","people":[{"label":"SB","star":false}],"x":""},{"poste":"echo1","date":"2026-10-01","part":"AM","people":[{"label":"BM","star":false}],"x":""},{"poste":"echo1","date":"2026-10-02","part":"M","people":[{"label":"JB","star":false}],"x":""},{"poste":"echo1","date":"2026-10-02","part":"AM","people":[{"label":"TT","star":false}],"x":""},{"poste":"echo2","date":"2026-09-28","part":"M","people":[{"label":"JB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"echo2","date":"2026-09-28","part":"AM","people":[{"label":"LM","star":false}],"x":""},{"poste":"echo2","date":"2026-09-29","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"echo2","date":"2026-09-29","part":"AM","people":[{"label":"JB","star":false}],"x":""},{"poste":"echo2","date":"2026-09-30","part":"AM","people":[{"label":"JR","star":false}],"x":""},{"poste":"echo2","date":"2026-10-01","part":"M","people":[{"label":"LH","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo2","date":"2026-10-01","part":"AM","people":[{"label":"EB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"echo2","date":"2026-10-02","part":"M","people":[{"label":"KS","star":false}],"x":""},{"poste":"echo2","date":"2026-10-02","part":"AM","people":[{"label":"SB","star":false}],"x":""},{"poste":"mammo","date":"2026-09-28","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"mammo","date":"2026-09-28","part":"AM","people":[{"label":"EB","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"mammo","date":"2026-09-29","part":"M","people":[{"label":"AG","star":false}],"x":""},{"poste":"mammo","date":"2026-09-29","part":"AM","people":[{"label":"SG","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"mammo","date":"2026-09-30","part":"M","people":[{"label":"SG","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"mammo","date":"2026-09-30","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"mammo","date":"2026-10-01","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"mammo","date":"2026-10-01","part":"AM","people":[{"label":"Eric","star":false}],"x":""},{"poste":"mammo","date":"2026-10-02","part":"M","people":[{"label":"EB","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"mammo","date":"2026-10-02","part":"AM","people":[{"label":"AG","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"astreinte","date":"2026-09-28","part":"M","people":[{"label":"JR","star":false}],"x":""},{"poste":"astreinte","date":"2026-09-28","part":"AM","people":[{"label":"JR","star":false}],"x":""},{"poste":"astreinte","date":"2026-09-29","part":"M","people":[{"label":"AYG","star":false}],"x":""},{"poste":"astreinte","date":"2026-09-29","part":"AM","people":[{"label":"AYG","star":false}],"x":""},{"poste":"astreinte","date":"2026-09-30","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"astreinte","date":"2026-09-30","part":"AM","people":[{"label":"SG","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-01","part":"M","people":[{"label":"EB","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-01","part":"AM","people":[{"label":"EB","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-02","part":"M","people":[{"label":"LH","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-02","part":"AM","people":[{"label":"LH","star":false}],"x":""}],"absences":[{"label":"Clara B","date":"2026-10-02","part":"M","note":"Absent"},{"label":"Clara B","date":"2026-10-02","part":"AM","note":"Absent"},{"label":"Rayann","date":"2026-10-02","part":"M","note":"Absent"},{"label":"Rayann","date":"2026-10-02","part":"AM","note":"Absent"},{"label":"Clara M","date":"2026-09-30","part":"M","note":"Absent"},{"label":"Clara M","date":"2026-09-30","part":"AM","note":"Absent"},{"label":"Héloïse","date":"2026-10-02","part":"M","note":"Absent"},{"label":"Héloïse","date":"2026-10-02","part":"AM","note":"Absent"},{"label":"Chloé","date":"2026-09-28","part":"M","note":"Congés"},{"label":"Chloé","date":"2026-09-28","part":"AM","note":"Congés"},{"label":"Chloé","date":"2026-09-29","part":"M","note":"Congés"},{"label":"Chloé","date":"2026-09-29","part":"AM","note":"Congés"},{"label":"Chloé","date":"2026-09-30","part":"M","note":"Congés"},{"label":"Chloé","date":"2026-09-30","part":"AM","note":"Congés"},{"label":"Chloé","date":"2026-10-01","part":"M","note":"Congés"},{"label":"Chloé","date":"2026-10-01","part":"AM","note":"Congés"},{"label":"Chloé","date":"2026-10-02","part":"M","note":"Congés"},{"label":"Chloé","date":"2026-10-02","part":"AM","note":"Congés"},{"label":"AG","date":"2026-09-28","part":"M","note":"Congés"},{"label":"AG","date":"2026-09-28","part":"AM","note":"Congés"},{"label":"KS","date":"2026-09-28","part":"M","note":"Congés"},{"label":"KS","date":"2026-09-28","part":"AM","note":"Congés"},{"label":"SB","date":"2026-09-28","part":"M","note":"Congés"},{"label":"SB","date":"2026-09-28","part":"AM","note":"Congés"},{"label":"BV","date":"2026-09-28","part":"M","note":"Congés"},{"label":"BV","date":"2026-09-28","part":"AM","note":"Congés"},{"label":"AR","date":"2026-09-28","part":"M","note":"Congés"},{"label":"AR","date":"2026-09-28","part":"AM","note":"Congés"},{"label":"EB","date":"2026-09-29","part":"M","note":"Congés"},{"label":"EB","date":"2026-09-29","part":"AM","note":"Congés"},{"label":"SB","date":"2026-09-29","part":"M","note":"Congés"},{"label":"SB","date":"2026-09-29","part":"AM","note":"Congés"},{"label":"JR","date":"2026-09-29","part":"M","note":"Congés"},{"label":"JR","date":"2026-09-29","part":"AM","note":"Congés"},{"label":"BV","date":"2026-09-29","part":"M","note":"Congés"},{"label":"BV","date":"2026-09-29","part":"AM","note":"Congés"},{"label":"AR","date":"2026-09-29","part":"M","note":"Congés"},{"label":"AR","date":"2026-09-29","part":"AM","note":"Congés"},{"label":"MDP","date":"2026-09-30","part":"M","note":"Congés"},{"label":"MDP","date":"2026-09-30","part":"AM","note":"Congés"},{"label":"JB","date":"2026-09-30","part":"M","note":"Congés"},{"label":"JB","date":"2026-09-30","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-09-30","part":"M","note":"Congés"},{"label":"AXC","date":"2026-09-30","part":"AM","note":"Congés"},{"label":"LH","date":"2026-09-30","part":"M","note":"Congés"},{"label":"LH","date":"2026-09-30","part":"AM","note":"Congés"},{"label":"BV","date":"2026-09-30","part":"M","note":"Congés"},{"label":"BV","date":"2026-09-30","part":"AM","note":"Congés"},{"label":"AR","date":"2026-09-30","part":"M","note":"Congés"},{"label":"AR","date":"2026-09-30","part":"AM","note":"Congés"},{"label":"LM","date":"2026-09-30","part":"M","note":"Congés"},{"label":"LM","date":"2026-09-30","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-01","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-01","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-01","part":"AM","note":"Congés"},{"label":"LOM","date":"2026-10-01","part":"M","note":"Congés"},{"label":"LOM","date":"2026-10-01","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-01","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-01","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-01","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-01","part":"AM","note":"Congés"},{"label":"SG","date":"2026-10-02","part":"M","note":"Congés"},{"label":"SG","date":"2026-10-02","part":"AM","note":"Congés"},{"label":"BM","date":"2026-10-02","part":"M","note":"Congés"},{"label":"BM","date":"2026-10-02","part":"AM","note":"Congés"},{"label":"AYG","date":"2026-10-02","part":"M","note":"Congés"},{"label":"AYG","date":"2026-10-02","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-02","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-02","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-02","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-02","part":"AM","note":"Congés"}],"notes":[{"date":"2026-10-01","text":"AYG : Staff IRM à 13h30"},{"date":"2026-09-29","text":"MDP Bureau"},{"date":"2026-10-01","text":"MDP Bureau Pôle à 13h + Bureau"},{"date":"2026-09-28","text":"Ne pas modifier le médecin : plage coro lundi apm"},{"date":"2026-09-30","text":"Ne pas modifier le médecin : plage supplémentaire pédiatrie mercredi matin si JB et SG présentes"},{"date":"2026-10-01","text":"Ne pas modifier le médecin : plage pédiatrie jeudi matin"},{"date":"2026-10-02","text":"Ne pas modifier le médecin : plage coro vendredi matin"},{"date":"2026-10-01","text":"Ne pas modifier le médecin : plage IRM cardiaque mardi matin"},{"date":"2026-10-02","text":"Ne pas modifier le médecin : bloc séno vendredi matin"}]},{"monday":"2026-10-05","dates":["2026-10-05","2026-10-06","2026-10-07","2026-10-08","2026-10-09"],"cells":[{"poste":"interp-urg","date":"2026-10-05","part":"M","people":[],"x":"SCAN/IRM (V/S)"},{"poste":"interp-urg","date":"2026-10-05","part":"AM","people":[],"x":"IRM (D)"},{"poste":"interp-urg","date":"2026-10-06","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-06","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-07","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-07","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-08","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-08","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-09","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-09","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-ext","date":"2026-10-05","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-05","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-06","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-06","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-07","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-07","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-08","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-08","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-09","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-09","part":"AM","people":[],"x":"IRM 2"},{"poste":"blaye","date":"2026-10-05","part":"M","people":[{"label":"BM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-05","part":"AM","people":[{"label":"BM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-06","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-06","part":"AM","people":[{"label":"SG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-09","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"blaye","date":"2026-10-09","part":"AM","people":[{"label":"MDP","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-05","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-05","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-07","part":"M","people":[{"label":"JR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-07","part":"AM","people":[{"label":"JR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-08","part":"M","people":[{"label":"KS","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-08","part":"AM","people":[{"label":"KS","star":false}],"x":""},{"poste":"scanner","date":"2026-10-05","part":"M","people":[{"label":"SG","star":false},{"label":"JR","star":false},{"label":"JB","star":true},{"label":"Clara B","star":false}],"x":""},{"poste":"scanner","date":"2026-10-05","part":"AM","people":[{"label":"MDP","star":false},{"label":"AYG","star":false},{"label":"JB","star":true},{"label":"Héloïse","star":false}],"x":""},{"poste":"scanner","date":"2026-10-06","part":"M","people":[{"label":"LOM","star":false},{"label":"BM","star":true},{"label":"Rayann","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"scanner","date":"2026-10-06","part":"AM","people":[{"label":"AXC","star":false},{"label":"KS","star":false},{"label":"BM","star":true},{"label":"Rayann","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"scanner","date":"2026-10-07","part":"M","people":[{"label":"KS","star":false},{"label":"SG","star":false},{"label":"LOM","star":true},{"label":"Chloé","star":false}],"x":"MAINTENANCE SCAN 1"},{"poste":"scanner","date":"2026-10-07","part":"AM","people":[{"label":"BM","star":false},{"label":"AXC","star":false},{"label":"LOM","star":true},{"label":"Rayann","star":false}],"x":"MAINTENANCE SCAN 1"},{"poste":"scanner","date":"2026-10-08","part":"M","people":[{"label":"BM","star":false},{"label":"AYG","star":false},{"label":"Rayann","star":false}],"x":"MAINTENANCE SCAN 1 8H-12H"},{"poste":"scanner","date":"2026-10-08","part":"AM","people":[{"label":"SG","star":false},{"label":"JR","star":false},{"label":"AXC","star":true},{"label":"Héloïse","star":false}],"x":"MAINTENANCE SCAN 1 8H-12H"},{"poste":"scanner","date":"2026-10-09","part":"M","people":[{"label":"Clara B","star":false},{"label":"LH","star":false},{"label":"SG","star":false}],"x":""},{"poste":"scanner","date":"2026-10-09","part":"AM","people":[{"label":"LOM","star":false},{"label":"JR","star":false},{"label":"JB","star":false}],"x":""},{"poste":"scanner-interv","date":"2026-10-06","part":"M","people":[{"label":"AXC","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"irm1","date":"2026-10-05","part":"M","people":[{"label":"LH","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"irm1","date":"2026-10-05","part":"AM","people":[{"label":"JR","star":false}],"x":""},{"poste":"irm1","date":"2026-10-06","part":"M","people":[{"label":"KS","star":false}],"x":""},{"poste":"irm1","date":"2026-10-06","part":"AM","people":[{"label":"MDP","star":false}],"x":""},{"poste":"irm1","date":"2026-10-07","part":"M","people":[{"label":"AXC","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"irm1","date":"2026-10-07","part":"AM","people":[{"label":"SG","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"irm1","date":"2026-10-08","part":"M","people":[{"label":"JB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"irm1","date":"2026-10-08","part":"AM","people":[{"label":"Clara B","star":false}],"x":""},{"poste":"irm1","date":"2026-10-09","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"irm1","date":"2026-10-09","part":"AM","people":[{"label":"Rayann","star":false}],"x":""},{"poste":"irm-blaye","date":"2026-10-06","part":"M","people":[{"label":"AYG","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-06","part":"AM","people":[{"label":"AYG","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-08","part":"M","people":[{"label":"LH","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-08","part":"AM","people":[{"label":"LH","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-09","part":"M","people":[{"label":"KS","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-09","part":"AM","people":[{"label":"KS","star":true}],"x":""},{"poste":"salle-interv","date":"2026-10-05","part":"M","people":[{"label":"AXC","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-05","part":"AM","people":[{"label":"AXC","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-08","part":"M","people":[{"label":"JR","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-08","part":"AM","people":[{"label":"AYG","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-09","part":"M","people":[{"label":"AYG","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-09","part":"AM","people":[{"label":"AYG","star":false}],"x":""},{"poste":"echo1","date":"2026-10-05","part":"M","people":[{"label":"AYG","star":false}],"x":""},{"poste":"echo1","date":"2026-10-06","part":"AM","people":[{"label":"LOM","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo2","date":"2026-10-05","part":"AM","people":[{"label":"LH","star":false}],"x":""},{"poste":"echo2","date":"2026-10-06","part":"M","people":[{"label":"JB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"echo2","date":"2026-10-07","part":"M","people":[{"label":"BM","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo2","date":"2026-10-07","part":"AM","people":[{"label":"KS","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo2","date":"2026-10-08","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"echo2","date":"2026-10-08","part":"AM","people":[{"label":"BM","star":false}],"x":""},{"poste":"echo2","date":"2026-10-09","part":"M","people":[{"label":"JR","star":false}],"x":""},{"poste":"echo2","date":"2026-10-09","part":"AM","people":[{"label":"LH","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"mammo","date":"2026-10-05","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"mammo","date":"2026-10-05","part":"AM","people":[{"label":"SG","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"mammo","date":"2026-10-06","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"mammo","date":"2026-10-06","part":"AM","people":[{"label":"JB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"mammo","date":"2026-10-08","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"mammo","date":"2026-10-08","part":"AM","people":[{"label":"JB","star":false}],"x":""},{"poste":"mammo","date":"2026-10-09","part":"M","people":[{"label":"JB","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"mammo","date":"2026-10-09","part":"AM","people":[{"label":"SG","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-05","part":"M","people":[{"label":"Clara B","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-05","part":"AM","people":[{"label":"Clara B","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-06","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-06","part":"AM","people":[{"label":"MDP","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-07","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-07","part":"AM","people":[{"label":"SG","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-08","part":"M","people":[{"label":"JB","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-08","part":"AM","people":[{"label":"JB","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-09","part":"M","people":[{"label":"Rayann","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-09","part":"AM","people":[{"label":"Rayann","star":false}],"x":""}],"absences":[{"label":"Clara B","date":"2026-10-07","part":"M","note":"Absent"},{"label":"Clara B","date":"2026-10-07","part":"AM","note":"Absent"},{"label":"Rayann","date":"2026-10-05","part":"M","note":"Absent"},{"label":"Rayann","date":"2026-10-05","part":"AM","note":"Absent"},{"label":"Clara M","date":"2026-10-05","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-05","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-06","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-06","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-07","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-08","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-08","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-09","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-09","part":"AM","note":"Congés"},{"label":"Héloïse","date":"2026-10-09","part":"M","note":"Absent"},{"label":"Héloïse","date":"2026-10-09","part":"AM","note":"Absent"},{"label":"Chloé","date":"2026-10-08","part":"M","note":"Absent"},{"label":"Chloé","date":"2026-10-08","part":"AM","note":"Absent"},{"label":"KS","date":"2026-10-05","part":"M","note":"Congés"},{"label":"KS","date":"2026-10-05","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-05","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-05","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-05","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-05","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-05","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-05","part":"AM","note":"Congés"},{"label":"AG","date":"2026-10-05","part":"M","note":"Congés"},{"label":"AG","date":"2026-10-05","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-05","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-05","part":"AM","note":"Congés"},{"label":"TT","date":"2026-10-05","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-05","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-06","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-06","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-06","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-06","part":"AM","note":"Congés"},{"label":"JR","date":"2026-10-06","part":"M","note":"Congés"},{"label":"JR","date":"2026-10-06","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-06","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-06","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-06","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-06","part":"AM","note":"Congés"},{"label":"AG","date":"2026-10-06","part":"M","note":"Congés"},{"label":"AG","date":"2026-10-06","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-06","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-06","part":"AM","note":"Congés"},{"label":"TT","date":"2026-10-06","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-06","part":"AM","note":"Congés"},{"label":"MDP","date":"2026-10-07","part":"M","note":"Congés"},{"label":"MDP","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"JB","date":"2026-10-07","part":"M","note":"Congés"},{"label":"JB","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"AYG","date":"2026-10-07","part":"M","note":"Congés"},{"label":"AYG","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-07","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-07","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-07","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-07","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"AG","date":"2026-10-07","part":"M","note":"Congés"},{"label":"AG","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-07","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"TT","date":"2026-10-07","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-07","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-08","part":"M","note":"Congés"},{"label":"LOM","date":"2026-10-08","part":"M","note":"Congés"},{"label":"LOM","date":"2026-10-08","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-08","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-08","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-08","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-08","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-08","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-08","part":"AM","note":"Congés"},{"label":"AG","date":"2026-10-08","part":"M","note":"Congés"},{"label":"AG","date":"2026-10-08","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-08","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-08","part":"AM","note":"Congés"},{"label":"TT","date":"2026-10-08","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-08","part":"AM","note":"Congés"},{"label":"BM","date":"2026-10-09","part":"M","note":"Congés"},{"label":"BM","date":"2026-10-09","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-09","part":"M","note":"Congés"},{"label":"AXC","date":"2026-10-09","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-09","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-09","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-09","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-09","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-09","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-09","part":"AM","note":"Congés"},{"label":"AG","date":"2026-10-09","part":"M","note":"Congés"},{"label":"AG","date":"2026-10-09","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-09","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-09","part":"AM","note":"Congés"},{"label":"TT","date":"2026-10-09","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-09","part":"AM","note":"Congés"}],"notes":[{"date":"2026-10-06","text":"Réunion de service à 13h30"},{"date":"2026-10-08","text":"Eric Absent"},{"date":"2026-10-08","text":"Staff Mammo à 13h30"},{"date":"2026-10-08","text":"MDP Bureau"},{"date":"2026-10-05","text":"Ne pas modifier le médecin : plage coro lundi apm"},{"date":"2026-10-07","text":"Ne pas modifier le médecin : plage supplémentaire pédiatrie mercredi matin si JB et SG présentes"},{"date":"2026-10-08","text":"Ne pas modifier le médecin : plage pédiatrie jeudi matin"},{"date":"2026-10-09","text":"Ne pas modifier le médecin : plage coro vendredi matin"},{"date":"2026-10-08","text":"Ne pas modifier le médecin : plage IRM cardiaque jeudi apm"},{"date":"2026-10-09","text":"Ne pas modifier le médecin : bloc séno vendredi matin"},{"date":"2026-10-08","text":"Ne pas modifier le médecin : plage arthro en salle interv. Jeudi matin"}]},{"monday":"2026-10-12","dates":["2026-10-12","2026-10-13","2026-10-14","2026-10-15","2026-10-16"],"cells":[{"poste":"interp-urg","date":"2026-10-12","part":"M","people":[],"x":"SCAN/IRM (V/S)"},{"poste":"interp-urg","date":"2026-10-12","part":"AM","people":[],"x":"IRM (D)"},{"poste":"interp-urg","date":"2026-10-13","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-13","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-14","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-14","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-15","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-15","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-16","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-16","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-ext","date":"2026-10-12","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-12","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-13","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-13","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-14","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-14","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-15","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-15","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-16","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-16","part":"AM","people":[],"x":"IRM 2"},{"poste":"blaye","date":"2026-10-12","part":"M","people":[{"label":"MDP","star":false},{"label":"BM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-12","part":"AM","people":[{"label":"MDP","star":false},{"label":"BM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-13","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-13","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-14","part":"M","people":[{"label":"AG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-14","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-15","part":"M","people":[{"label":"JB","star":false},{"label":"JR","star":false}],"x":""},{"poste":"blaye","date":"2026-10-15","part":"AM","people":[{"label":"JB","star":false},{"label":"JR","star":false}],"x":""},{"poste":"blaye","date":"2026-10-16","part":"M","people":[{"label":"EB","star":false}],"x":""},{"poste":"blaye","date":"2026-10-16","part":"AM","people":[{"label":"EB","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-12","part":"M","people":[{"label":"AYG","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-12","part":"AM","people":[{"label":"AYG","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-14","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-14","part":"AM","people":[{"label":"SG","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-15","part":"M","people":[{"label":"KS","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-15","part":"AM","people":[{"label":"KS","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-16","part":"M","people":[{"label":"AR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-16","part":"AM","people":[{"label":"AR","star":false}],"x":""},{"poste":"scanner","date":"2026-10-12","part":"M","people":[{"label":"JR","star":false},{"label":"SG","star":false},{"label":"LH","star":true}],"x":""},{"poste":"scanner","date":"2026-10-12","part":"AM","people":[{"label":"Clara B","star":false},{"label":"EB","star":false},{"label":"LH","star":true}],"x":""},{"poste":"scanner","date":"2026-10-13","part":"M","people":[{"label":"AG","star":false},{"label":"AR","star":false},{"label":"JB","star":true},{"label":"Clara B","star":false}],"x":""},{"poste":"scanner","date":"2026-10-13","part":"AM","people":[{"label":"KS","star":false},{"label":"AXC","star":false},{"label":"JB","star":true},{"label":"Héloïse","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"scanner","date":"2026-10-14","part":"M","people":[{"label":"JR","star":false},{"label":"LOM","star":true},{"label":"AR","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"scanner","date":"2026-10-14","part":"AM","people":[{"label":"BM","star":false},{"label":"KS","star":false},{"label":"LOM","star":true},{"label":"Chloé","star":false}],"x":""},{"poste":"scanner","date":"2026-10-15","part":"M","people":[{"label":"MDP","star":false},{"label":"AG","star":false},{"label":"Rayann","star":false}],"x":"MAINTENANCE SCAN 2"},{"poste":"scanner","date":"2026-10-15","part":"AM","people":[{"label":"EB","star":false},{"label":"LH","star":false},{"label":"AXC","star":true},{"label":"Héloïse","star":false}],"x":"MAINTENANCE SCAN 2"},{"poste":"scanner","date":"2026-10-16","part":"M","people":[{"label":"MDP","star":false},{"label":"KS","star":false},{"label":"JR","star":true},{"label":"Rayann","star":false}],"x":""},{"poste":"scanner","date":"2026-10-16","part":"AM","people":[{"label":"LOM","star":false},{"label":"LH","star":false},{"label":"JR","star":true}],"x":""},{"poste":"scanner-interv","date":"2026-10-13","part":"M","people":[{"label":"AXC","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"scanner-interv","date":"2026-10-14","part":"M","people":[{"label":"BM","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"irm2","date":"2026-10-12","part":"M","people":[{"label":"JB","star":false}],"x":""},{"poste":"irm2","date":"2026-10-12","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"irm2","date":"2026-10-13","part":"M","people":[{"label":"BM","star":false}],"x":""},{"poste":"irm2","date":"2026-10-13","part":"AM","people":[{"label":"SG","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"irm2","date":"2026-10-14","part":"M","people":[{"label":"KS","star":false}],"x":""},{"poste":"irm2","date":"2026-10-14","part":"AM","people":[{"label":"AYG","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"irm2","date":"2026-10-15","part":"M","people":[{"label":"EB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"irm2","date":"2026-10-15","part":"AM","people":[{"label":"Clara B","star":false}],"x":""},{"poste":"irm2","date":"2026-10-16","part":"M","people":[{"label":"AG","star":false}],"x":""},{"poste":"irm2","date":"2026-10-16","part":"AM","people":[{"label":"JB","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"irm-blaye","date":"2026-10-12","part":"M","people":[{"label":"AR","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-12","part":"AM","people":[{"label":"AR","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-15","part":"M","people":[{"label":"BM","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-15","part":"AM","people":[{"label":"BM","star":true}],"x":""},{"poste":"irm-3t","date":"2026-10-12","part":"M","people":[{"label":"TT","star":false}],"x":""},{"poste":"irm-3t","date":"2026-10-12","part":"AM","people":[{"label":"TT","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-12","part":"M","people":[{"label":"AXC","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-12","part":"AM","people":[{"label":"AXC","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-13","part":"M","people":[{"label":"AYG","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-13","part":"AM","people":[{"label":"AYG","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-15","part":"M","people":[{"label":"AYG","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-15","part":"AM","people":[{"label":"AYG","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-16","part":"M","people":[{"label":"AXC","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-16","part":"AM","people":[{"label":"AXC","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"echo1","date":"2026-10-12","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"echo1","date":"2026-10-12","part":"AM","people":[{"label":"JR","star":false}],"x":""},{"poste":"echo1","date":"2026-10-13","part":"M","people":[{"label":"KS","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo1","date":"2026-10-13","part":"AM","people":[{"label":"BM","star":false}],"x":""},{"poste":"echo1","date":"2026-10-14","part":"M","people":[{"label":"AYG","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"echo1","date":"2026-10-14","part":"AM","people":[{"label":"JR","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo1","date":"2026-10-15","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"echo1","date":"2026-10-16","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"echo1","date":"2026-10-16","part":"AM","people":[{"label":"KS","star":false}],"x":""},{"poste":"echo2","date":"2026-10-12","part":"AM","people":[{"label":"SG","star":false}],"x":""},{"poste":"echo2","date":"2026-10-13","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"echo2","date":"2026-10-13","part":"AM","people":[{"label":"AR","star":false}],"x":""},{"poste":"echo2","date":"2026-10-14","part":"M","people":[{"label":"Clara B","star":false}],"x":""},{"poste":"echo2","date":"2026-10-14","part":"AM","people":[{"label":"AR","star":false}],"x":""},{"poste":"echo2","date":"2026-10-15","part":"M","people":[{"label":"LH","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo2","date":"2026-10-15","part":"AM","people":[{"label":"SG","star":false}],"x":""},{"poste":"echo2","date":"2026-10-16","part":"M","people":[{"label":"LH","star":false}],"x":""},{"poste":"echo2","date":"2026-10-16","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"mammo","date":"2026-10-12","part":"M","people":[{"label":"EB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"mammo","date":"2026-10-12","part":"AM","people":[{"label":"JB","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"mammo","date":"2026-10-13","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"mammo","date":"2026-10-13","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"mammo","date":"2026-10-14","part":"M","people":[{"label":"EB","star":false}],"x":""},{"poste":"mammo","date":"2026-10-14","part":"AM","people":[{"label":"EB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"mammo","date":"2026-10-15","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"mammo","date":"2026-10-15","part":"AM","people":[{"label":"Eric","star":false}],"x":""},{"poste":"mammo","date":"2026-10-16","part":"M","people":[{"label":"JB","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"mammo","date":"2026-10-16","part":"AM","people":[{"label":"MDP","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-12","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-12","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-13","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-13","part":"AM","people":[{"label":"SG","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-14","part":"M","people":[{"label":"AYG","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-14","part":"AM","people":[{"label":"AYG","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-15","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-15","part":"AM","people":[{"label":"MDP","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-16","part":"M","people":[{"label":"JB","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-16","part":"AM","people":[{"label":"JB","star":false}],"x":""}],"absences":[{"label":"Clara B","date":"2026-10-16","part":"M","note":"Absent"},{"label":"Clara B","date":"2026-10-16","part":"AM","note":"Absent"},{"label":"Rayann","date":"2026-10-12","part":"M","note":"Absent"},{"label":"Rayann","date":"2026-10-12","part":"AM","note":"Absent"},{"label":"Clara M","date":"2026-10-12","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-12","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-13","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-13","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-14","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-14","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-15","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-15","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-16","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-16","part":"AM","note":"Congés"},{"label":"Héloïse","date":"2026-10-12","part":"M","note":"Absent"},{"label":"Héloïse","date":"2026-10-12","part":"AM","note":"Absent"},{"label":"Chloé","date":"2026-10-15","part":"M","note":"Cours"},{"label":"Chloé","date":"2026-10-15","part":"AM","note":"Cours"},{"label":"Chloé","date":"2026-10-16","part":"M","note":"Cours"},{"label":"Chloé","date":"2026-10-16","part":"AM","note":"Cours"},{"label":"AG","date":"2026-10-12","part":"M","note":"Congés"},{"label":"AG","date":"2026-10-12","part":"AM","note":"Congés"},{"label":"KS","date":"2026-10-12","part":"M","note":"Congés"},{"label":"KS","date":"2026-10-12","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-12","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-12","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-12","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-12","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-13","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-13","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-13","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-13","part":"AM","note":"Congés"},{"label":"JR","date":"2026-10-13","part":"M","note":"Congés"},{"label":"JR","date":"2026-10-13","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-13","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-13","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-13","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-13","part":"AM","note":"Congés"},{"label":"TT","date":"2026-10-13","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-13","part":"AM","note":"Congés"},{"label":"MDP","date":"2026-10-14","part":"M","note":"Congés"},{"label":"MDP","date":"2026-10-14","part":"AM","note":"Congés"},{"label":"JB","date":"2026-10-14","part":"M","note":"Congés"},{"label":"JB","date":"2026-10-14","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-14","part":"M","note":"Congés"},{"label":"AXC","date":"2026-10-14","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-14","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-14","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-14","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-14","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-14","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-14","part":"AM","note":"Congés"},{"label":"TT","date":"2026-10-14","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-14","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-15","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-15","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-15","part":"AM","note":"Congés"},{"label":"LOM","date":"2026-10-15","part":"M","note":"Congés"},{"label":"LOM","date":"2026-10-15","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-15","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-15","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-15","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-15","part":"AM","note":"Congés"},{"label":"TT","date":"2026-10-15","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-15","part":"AM","note":"Congés"},{"label":"SG","date":"2026-10-16","part":"M","note":"Congés"},{"label":"SG","date":"2026-10-16","part":"AM","note":"Congés"},{"label":"BM","date":"2026-10-16","part":"M","note":"Congés"},{"label":"BM","date":"2026-10-16","part":"AM","note":"Congés"},{"label":"AYG","date":"2026-10-16","part":"M","note":"Congés"},{"label":"AYG","date":"2026-10-16","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-16","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-16","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-16","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-16","part":"AM","note":"Congés"},{"label":"TT","date":"2026-10-16","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-16","part":"AM","note":"Congés"}],"notes":[{"date":"2026-10-13","text":"MDP Directoire à 12h30 + Bureau"},{"date":"2026-10-15","text":"MDP CME à 11h30 + Bureau"},{"date":"2026-10-13","text":"AXC : Staff Interv. à 13h"},{"date":"2026-10-12","text":"Ne pas modifier le médecin : plage coro lundi apm"},{"date":"2026-10-14","text":"Ne pas modifier le médecin : plage supplémentaire pédiatrie mercredi matin si JB et SG présentes"},{"date":"2026-10-15","text":"Ne pas modifier le médecin : plage pédiatrie jeudi matin"},{"date":"2026-10-16","text":"Ne pas modifier le médecin : plage coro vendredi matin"},{"date":"2026-10-15","text":"Ne pas modifier le médecin : plage IRM cardiaque jeudi apm"},{"date":"2026-10-16","text":"Ne pas modifier le médecin : bloc séno vendredi matin"},{"date":"2026-10-15","text":"Ne pas modifier le médecin : plage arthro en salle interv. Jeudi matin"}]},{"monday":"2026-10-19","dates":["2026-10-19","2026-10-20","2026-10-21","2026-10-22","2026-10-23"],"cells":[{"poste":"interp-urg","date":"2026-10-19","part":"M","people":[],"x":"SCAN/IRM (V/S)"},{"poste":"interp-urg","date":"2026-10-19","part":"AM","people":[],"x":"IRM (D)"},{"poste":"interp-urg","date":"2026-10-20","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-20","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-21","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-21","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-22","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-22","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-23","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-23","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-ext","date":"2026-10-19","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-19","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-20","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-20","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-21","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-21","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-22","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-22","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-23","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-23","part":"AM","people":[],"x":"IRM 2"},{"poste":"blaye","date":"2026-10-19","part":"M","people":[{"label":"BM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-19","part":"AM","people":[{"label":"BM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-20","part":"M","people":[{"label":"JB","star":false},{"label":"LOM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-20","part":"AM","people":[{"label":"JB","star":false},{"label":"LOM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-21","part":"M","people":[{"label":"BM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-21","part":"AM","people":[{"label":"BM","star":false}],"x":""},{"poste":"blaye","date":"2026-10-22","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-22","part":"AM","people":[{"label":"SG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-23","part":"M","people":[{"label":"AG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-23","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-19","part":"M","people":[{"label":"AR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-19","part":"AM","people":[{"label":"AR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-20","part":"M","people":[{"label":"KS","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-20","part":"AM","people":[{"label":"KS","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-21","part":"M","people":[{"label":"TT","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-21","part":"AM","people":[{"label":"TT","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-22","part":"M","people":[{"label":"JR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-22","part":"AM","people":[{"label":"JR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-23","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-23","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"scanner","date":"2026-10-19","part":"M","people":[{"label":"BV","star":false},{"label":"AXC","star":false},{"label":"TT","star":false}],"x":""},{"poste":"scanner","date":"2026-10-19","part":"AM","people":[{"label":"BV","star":false},{"label":"JR","star":false},{"label":"LOM","star":false}],"x":""},{"poste":"scanner","date":"2026-10-20","part":"M","people":[{"label":"AR","star":false},{"label":"BV","star":false},{"label":"BM","star":true}],"x":""},{"poste":"scanner","date":"2026-10-20","part":"AM","people":[{"label":"AG","star":false},{"label":"BV","star":false},{"label":"BM","star":true}],"x":""},{"poste":"scanner","date":"2026-10-21","part":"M","people":[{"label":"LOM","star":false},{"label":"JR","star":false},{"label":"KS","star":true},{"label":"Héloïse","star":false}],"x":""},{"poste":"scanner","date":"2026-10-21","part":"AM","people":[{"label":"BV","star":false},{"label":"SG","star":false},{"label":"KS","star":true},{"label":"Clara B","star":false}],"x":""},{"poste":"scanner","date":"2026-10-22","part":"M","people":[{"label":"KS","star":false},{"label":"BV","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"scanner","date":"2026-10-22","part":"AM","people":[{"label":"BM","star":false},{"label":"BV","star":false},{"label":"AXC","star":true},{"label":"Chloé","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"scanner","date":"2026-10-23","part":"M","people":[{"label":"Clara B","star":false},{"label":"JB","star":false},{"label":"AR","star":true},{"label":"Rayann","star":false}],"x":""},{"poste":"scanner","date":"2026-10-23","part":"AM","people":[{"label":"JR","star":false},{"label":"KS","star":false},{"label":"AR","star":true},{"label":"Héloïse","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"scanner-interv","date":"2026-10-20","part":"M","people":[{"label":"AXC","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"scanner-interv","date":"2026-10-21","part":"M","people":[{"label":"AXC","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"irm2","date":"2026-10-19","part":"M","people":[{"label":"LOM","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"irm2","date":"2026-10-19","part":"AM","people":[{"label":"AXC","star":false}],"x":""},{"poste":"irm2","date":"2026-10-20","part":"M","people":[{"label":"TT","star":false}],"x":""},{"poste":"irm2","date":"2026-10-20","part":"AM","people":[{"label":"AR","star":false}],"x":""},{"poste":"irm2","date":"2026-10-21","part":"M","people":[{"label":"BV","star":false}],"x":""},{"poste":"irm2","date":"2026-10-21","part":"AM","people":[{"label":"JR","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"irm2","date":"2026-10-22","part":"M","people":[{"label":"JB","star":false}],"x":""},{"poste":"irm2","date":"2026-10-22","part":"AM","people":[{"label":"Clara B","star":false}],"x":""},{"poste":"irm2","date":"2026-10-23","part":"M","people":[{"label":"KS","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"irm2","date":"2026-10-23","part":"AM","people":[{"label":"SG","star":false}],"x":""},{"poste":"irm-blaye","date":"2026-10-20","part":"M","people":[{"label":"Clara B","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-20","part":"AM","people":[{"label":"Clara B","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-22","part":"M","people":[{"label":"AG","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-22","part":"AM","people":[{"label":"AG","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-23","part":"M","people":[{"label":"TT","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-23","part":"AM","people":[{"label":"TT","star":true}],"x":""},{"poste":"salle-interv","date":"2026-10-20","part":"M","people":[{"label":"Jennifer","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-20","part":"AM","people":[{"label":"AXC","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"echo1","date":"2026-10-19","part":"M","people":[{"label":"JR","star":false}],"x":""},{"poste":"echo1","date":"2026-10-19","part":"AM","people":[{"label":"TT","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo1","date":"2026-10-20","part":"AM","people":[{"label":"TT","star":false}],"x":""},{"poste":"echo1","date":"2026-10-21","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"echo1","date":"2026-10-22","part":"AM","people":[{"label":"KS","star":false}],"x":""},{"poste":"echo1","date":"2026-10-23","part":"M","people":[{"label":"JR","star":false}],"x":""},{"poste":"echo1","date":"2026-10-23","part":"AM","people":[{"label":"Rayann","star":false}],"x":""},{"poste":"echo2","date":"2026-10-20","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"echo2","date":"2026-10-21","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"echo2","date":"2026-10-21","part":"AM","people":[{"label":"AXC","star":false},{"label":"Rayann","star":false}],"x":""},{"poste":"echo2","date":"2026-10-22","part":"M","people":[{"label":"BM","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"echo2","date":"2026-10-22","part":"AM","people":[{"label":"JB","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"mammo","date":"2026-10-19","part":"M","people":[{"label":"JB","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"mammo","date":"2026-10-19","part":"AM","people":[{"label":"JB","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"mammo","date":"2026-10-20","part":"M","people":[{"label":"AG","star":false}],"x":""},{"poste":"mammo","date":"2026-10-20","part":"AM","people":[{"label":"SG","star":false}],"x":""},{"poste":"mammo","date":"2026-10-21","part":"M","people":[{"label":"AG","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"mammo","date":"2026-10-21","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"mammo","date":"2026-10-22","part":"M","people":[{"label":"Clara B","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"mammo","date":"2026-10-22","part":"AM","people":[{"label":"Eric","star":false}],"x":""},{"poste":"mammo","date":"2026-10-23","part":"M","people":[{"label":"SG","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"mammo","date":"2026-10-23","part":"AM","people":[{"label":"JB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-19","part":"M","people":[{"label":"AXC","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-19","part":"AM","people":[{"label":"AXC","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-20","part":"M","people":[{"label":"AR","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-20","part":"AM","people":[{"label":"AR","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-21","part":"M","people":[{"label":"BM","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-21","part":"AM","people":[{"label":"BM","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-22","part":"M","people":[{"label":"Rayann","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-22","part":"AM","people":[{"label":"Rayann","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-23","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-23","part":"AM","people":[{"label":"SG","star":false}],"x":""}],"absences":[{"label":"Clara B","date":"2026-10-19","part":"M","note":"Absent"},{"label":"Clara B","date":"2026-10-19","part":"AM","note":"Absent"},{"label":"Rayann","date":"2026-10-19","part":"M","note":"Absent"},{"label":"Rayann","date":"2026-10-19","part":"AM","note":"Absent"},{"label":"Rayann","date":"2026-10-20","part":"M","note":"Absent"},{"label":"Rayann","date":"2026-10-20","part":"AM","note":"Absent"},{"label":"Clara M","date":"2026-10-19","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-19","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-20","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-20","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-21","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-21","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-22","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-22","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-23","part":"M","note":"Congés"},{"label":"Clara M","date":"2026-10-23","part":"AM","note":"Congés"},{"label":"Héloïse","date":"2026-10-20","part":"M","note":"Absent"},{"label":"Héloïse","date":"2026-10-20","part":"AM","note":"Absent"},{"label":"Chloé","date":"2026-10-21","part":"M","note":"Absent"},{"label":"Chloé","date":"2026-10-21","part":"AM","note":"Absent"},{"label":"AG","date":"2026-10-19","part":"M","note":"Congés"},{"label":"AG","date":"2026-10-19","part":"AM","note":"Congés"},{"label":"KS","date":"2026-10-19","part":"M","note":"Congés"},{"label":"KS","date":"2026-10-19","part":"AM","note":"Congés"},{"label":"SG","date":"2026-10-19","part":"M","note":"Congés"},{"label":"SG","date":"2026-10-19","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-19","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-19","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-19","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-19","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-19","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-19","part":"AM","note":"Congés"},{"label":"MDP","date":"2026-10-19","part":"M","note":"Congés"},{"label":"MDP","date":"2026-10-19","part":"AM","note":"Congés"},{"label":"AYG","date":"2026-10-19","part":"M","note":"Congés"},{"label":"AYG","date":"2026-10-19","part":"AM","note":"Congés"},{"label":"JR","date":"2026-10-20","part":"M","note":"Congés"},{"label":"JR","date":"2026-10-20","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-20","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-20","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-20","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-20","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-20","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-20","part":"AM","note":"Congés"},{"label":"MDP","date":"2026-10-20","part":"M","note":"Congés"},{"label":"MDP","date":"2026-10-20","part":"AM","note":"Congés"},{"label":"AYG","date":"2026-10-20","part":"M","note":"Congés"},{"label":"AYG","date":"2026-10-20","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-21","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-21","part":"AM","note":"Congés"},{"label":"JB","date":"2026-10-21","part":"M","note":"Congés"},{"label":"JB","date":"2026-10-21","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-21","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-21","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-21","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-21","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-21","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-21","part":"AM","note":"Congés"},{"label":"MDP","date":"2026-10-21","part":"M","note":"Congés"},{"label":"MDP","date":"2026-10-21","part":"AM","note":"Congés"},{"label":"AYG","date":"2026-10-21","part":"M","note":"Congés"},{"label":"AYG","date":"2026-10-21","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-22","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-22","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-22","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-22","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-22","part":"AM","note":"Congés"},{"label":"LOM","date":"2026-10-22","part":"M","note":"Congés"},{"label":"LOM","date":"2026-10-22","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-22","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-22","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-22","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-22","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-22","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-22","part":"AM","note":"Congés"},{"label":"MDP","date":"2026-10-22","part":"M","note":"Congés"},{"label":"MDP","date":"2026-10-22","part":"AM","note":"Congés"},{"label":"AYG","date":"2026-10-22","part":"M","note":"Congés"},{"label":"AYG","date":"2026-10-22","part":"AM","note":"Congés"},{"label":"BM","date":"2026-10-23","part":"M","note":"Congés"},{"label":"BM","date":"2026-10-23","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-23","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-23","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-23","part":"M","note":"Congés"},{"label":"AXC","date":"2026-10-23","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-23","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-23","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-23","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-23","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-23","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-23","part":"AM","note":"Congés"},{"label":"MDP","date":"2026-10-23","part":"M","note":"Congés"},{"label":"MDP","date":"2026-10-23","part":"AM","note":"Congés"},{"label":"AYG","date":"2026-10-23","part":"M","note":"Congés"},{"label":"AYG","date":"2026-10-23","part":"AM","note":"Congés"}],"notes":[{"date":"2026-10-22","text":"BM : Staff Scanner à 13h30"},{"date":"2026-10-19","text":"Ne pas modifier le médecin : plage coro lundi apm"},{"date":"2026-10-21","text":"Ne pas modifier le médecin : plage supplémentaire pédiatrie mercredi matin si JB et SG présentes"},{"date":"2026-10-22","text":"Ne pas modifier le médecin : plage pédiatrie jeudi matin"},{"date":"2026-10-23","text":"Ne pas modifier le médecin : plage coro vendredi matin"},{"date":"2026-10-22","text":"Ne pas modifier le médecin : plage IRM cardiaque jeudi apm"},{"date":"2026-10-23","text":"Ne pas modifier le médecin : bloc séno vendredi matin"},{"date":"2026-10-22","text":"Ne pas modifier le médecin : plage arthro en salle interv. Jeudi matin"}]},{"monday":"2026-10-26","dates":["2026-10-26","2026-10-27","2026-10-28","2026-10-29","2026-10-30"],"cells":[{"poste":"interp-urg","date":"2026-10-26","part":"M","people":[],"x":"SCAN/IRM (V/S)"},{"poste":"interp-urg","date":"2026-10-26","part":"AM","people":[],"x":"IRM (D)"},{"poste":"interp-urg","date":"2026-10-27","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-27","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-28","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-28","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-29","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-29","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-30","part":"M","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-urg","date":"2026-10-30","part":"AM","people":[],"x":"IRM 1 ET 2"},{"poste":"interp-ext","date":"2026-10-26","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-26","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-27","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-27","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-28","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-28","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-29","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-29","part":"AM","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-30","part":"M","people":[],"x":"IRM 2"},{"poste":"interp-ext","date":"2026-10-30","part":"AM","people":[],"x":"IRM 2"},{"poste":"blaye","date":"2026-10-26","part":"M","people":[{"label":"MDP","star":false},{"label":"JR","star":false}],"x":""},{"poste":"blaye","date":"2026-10-26","part":"AM","people":[{"label":"MDP","star":false},{"label":"JR","star":false}],"x":""},{"poste":"blaye","date":"2026-10-27","part":"M","people":[{"label":"SG","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"blaye","date":"2026-10-27","part":"AM","people":[{"label":"SG","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"blaye","date":"2026-10-28","part":"M","people":[{"label":"AG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-28","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"blaye","date":"2026-10-29","part":"M","people":[{"label":"Clara B","star":false}],"x":""},{"poste":"blaye","date":"2026-10-29","part":"AM","people":[{"label":"Clara B","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-26","part":"M","people":[{"label":"TT","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-26","part":"AM","people":[{"label":"TT","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-27","part":"M","people":[{"label":"AR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-27","part":"AM","people":[{"label":"AR","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-28","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"stefoy","date":"2026-10-28","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"scanner","date":"2026-10-26","part":"M","people":[{"label":"BV","star":false},{"label":"EB","star":false},{"label":"AR","star":false}],"x":""},{"poste":"scanner","date":"2026-10-26","part":"AM","people":[{"label":"Clara B","star":false},{"label":"BV","star":false},{"label":"AR","star":false}],"x":""},{"poste":"scanner","date":"2026-10-27","part":"M","people":[{"label":"BV","star":false},{"label":"LOM","star":false},{"label":"TT","star":true},{"label":"Chloé","star":false}],"x":""},{"poste":"scanner","date":"2026-10-27","part":"AM","people":[{"label":"BV","star":false},{"label":"BM","star":false},{"label":"TT","star":true},{"label":"Héloïse","star":false}],"x":""},{"poste":"scanner","date":"2026-10-28","part":"M","people":[{"label":"JR","star":false},{"label":"BM","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"scanner","date":"2026-10-28","part":"AM","people":[{"label":"AYG","star":false},{"label":"BV","star":false},{"label":"TT","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"scanner","date":"2026-10-29","part":"M","people":[{"label":"BV","star":false},{"label":"MDP","star":true},{"label":"Rayann","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"scanner","date":"2026-10-29","part":"AM","people":[{"label":"SG","star":false},{"label":"BV","star":false},{"label":"Rayann","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"scanner","date":"2026-10-30","part":"M","people":[{"label":"AG","star":false},{"label":"LOM","star":false},{"label":"AR","star":true},{"label":"Rayann","star":false}],"x":""},{"poste":"scanner","date":"2026-10-30","part":"AM","people":[{"label":"TT","star":false},{"label":"JR","star":false},{"label":"AR","star":true},{"label":"Héloïse","star":false}],"x":""},{"poste":"scanner-interv","date":"2026-10-27","part":"M","people":[{"label":"BM","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"scanner-interv","date":"2026-10-28","part":"M","people":[{"label":"AYG","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"irm2","date":"2026-10-26","part":"M","people":[{"label":"SG","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"irm2","date":"2026-10-26","part":"AM","people":[{"label":"EB","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"irm2","date":"2026-10-27","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"irm2","date":"2026-10-27","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"irm2","date":"2026-10-28","part":"M","people":[{"label":"BV","star":false}],"x":""},{"poste":"irm2","date":"2026-10-28","part":"AM","people":[{"label":"BM","star":false}],"x":""},{"poste":"irm2","date":"2026-10-29","part":"M","people":[{"label":"SG","star":false}],"x":""},{"poste":"irm2","date":"2026-10-29","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"irm2","date":"2026-10-30","part":"M","people":[{"label":"TT","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"irm2","date":"2026-10-30","part":"AM","people":[{"label":"MDP","star":false}],"x":""},{"poste":"irm-blaye","date":"2026-10-26","part":"M","people":[{"label":"BM","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-26","part":"AM","people":[{"label":"BM","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-29","part":"M","people":[{"label":"JR","star":true}],"x":""},{"poste":"irm-blaye","date":"2026-10-29","part":"AM","people":[{"label":"JR","star":true}],"x":""},{"poste":"irm-3t","date":"2026-10-26","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"irm-3t","date":"2026-10-26","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-26","part":"M","people":[{"label":"AYG","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-26","part":"AM","people":[{"label":"AYG","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-27","part":"M","people":[{"label":"AYG","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-27","part":"AM","people":[{"label":"AYG","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-29","part":"M","people":[{"label":"BM","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"salle-interv","date":"2026-10-29","part":"AM","people":[{"label":"AYG","star":false}],"x":""},{"poste":"echo1","date":"2026-10-26","part":"M","people":[{"label":"Clara M","star":false}],"x":""},{"poste":"echo1","date":"2026-10-26","part":"AM","people":[{"label":"Clara M","star":false}],"x":""},{"poste":"echo1","date":"2026-10-28","part":"M","people":[{"label":"TT","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo1","date":"2026-10-28","part":"AM","people":[{"label":"JR","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"echo1","date":"2026-10-29","part":"M","people":[{"label":"AYG","star":false}],"x":""},{"poste":"echo1","date":"2026-10-29","part":"AM","people":[{"label":"BM","star":false},{"label":"Chloé","star":false}],"x":""},{"poste":"echo1","date":"2026-10-30","part":"M","people":[{"label":"JR","star":false}],"x":""},{"poste":"echo1","date":"2026-10-30","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"echo2","date":"2026-10-27","part":"M","people":[{"label":"AG","star":false}],"x":""},{"poste":"echo2","date":"2026-10-27","part":"AM","people":[{"label":"EB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"echo2","date":"2026-10-28","part":"AM","people":[{"label":"Clara B","star":false}],"x":""},{"poste":"echo2","date":"2026-10-30","part":"AM","people":[{"label":"Rayann","star":false}],"x":""},{"poste":"mammo","date":"2026-10-26","part":"M","people":[{"label":"Clara B","star":false}],"x":""},{"poste":"mammo","date":"2026-10-26","part":"AM","people":[{"label":"SG","star":false},{"label":"Héloïse","star":false}],"x":""},{"poste":"mammo","date":"2026-10-27","part":"M","people":[{"label":"EB","star":false},{"label":"Clara B","star":false}],"x":""},{"poste":"mammo","date":"2026-10-27","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"mammo","date":"2026-10-28","part":"M","people":[{"label":"SG","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"mammo","date":"2026-10-28","part":"AM","people":[{"label":"SG","star":false},{"label":"Clara M","star":false}],"x":""},{"poste":"mammo","date":"2026-10-29","part":"M","people":[{"label":"AG","star":false}],"x":""},{"poste":"mammo","date":"2026-10-29","part":"AM","people":[{"label":"Eric","star":false}],"x":""},{"poste":"mammo","date":"2026-10-30","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"mammo","date":"2026-10-30","part":"AM","people":[{"label":"AG","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-26","part":"M","people":[{"label":"Clara M","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-26","part":"AM","people":[{"label":"Clara M","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-27","part":"M","people":[{"label":"LOM","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-27","part":"AM","people":[{"label":"LOM","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-28","part":"M","people":[{"label":"BM","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-28","part":"AM","people":[{"label":"BM","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-29","part":"M","people":[{"label":"Rayann","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-29","part":"AM","people":[{"label":"Rayann","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-30","part":"M","people":[{"label":"MDP","star":false}],"x":""},{"poste":"astreinte","date":"2026-10-30","part":"AM","people":[{"label":"MDP","star":false}],"x":""}],"absences":[{"label":"Clara B","date":"2026-10-30","part":"M","note":"Absent"},{"label":"Clara B","date":"2026-10-30","part":"AM","note":"Absent"},{"label":"Rayann","date":"2026-10-26","part":"M","note":"Congés"},{"label":"Rayann","date":"2026-10-26","part":"AM","note":"Congés"},{"label":"Rayann","date":"2026-10-27","part":"M","note":"Congés"},{"label":"Rayann","date":"2026-10-27","part":"AM","note":"Congés"},{"label":"Rayann","date":"2026-10-28","part":"M","note":"Congés"},{"label":"Rayann","date":"2026-10-28","part":"AM","note":"Congés"},{"label":"Rayann","date":"2026-10-29","part":"M","note":"Congés"},{"label":"Rayann","date":"2026-10-29","part":"AM","note":"Congés"},{"label":"Rayann","date":"2026-10-30","part":"M","note":"Congés"},{"label":"Rayann","date":"2026-10-30","part":"AM","note":"Congés"},{"label":"Clara M","date":"2026-10-30","part":"M","note":"Absent"},{"label":"Clara M","date":"2026-10-30","part":"AM","note":"Absent"},{"label":"Héloïse","date":"2026-10-29","part":"M","note":"Absent"},{"label":"Héloïse","date":"2026-10-29","part":"AM","note":"Absent"},{"label":"Chloé","date":"2026-10-30","part":"M","note":"Absent"},{"label":"Chloé","date":"2026-10-30","part":"AM","note":"Absent"},{"label":"AG","date":"2026-10-26","part":"M","note":"Congés"},{"label":"AG","date":"2026-10-26","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-26","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-26","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-26","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-26","part":"AM","note":"Congés"},{"label":"JB","date":"2026-10-26","part":"M","note":"Congés"},{"label":"JB","date":"2026-10-26","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-26","part":"M","note":"Congés"},{"label":"AXC","date":"2026-10-26","part":"AM","note":"Congés"},{"label":"KS","date":"2026-10-26","part":"M","note":"Congés"},{"label":"KS","date":"2026-10-26","part":"AM","note":"Congés"},{"label":"JR","date":"2026-10-27","part":"M","note":"Congés"},{"label":"JR","date":"2026-10-27","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-27","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-27","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-27","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-27","part":"AM","note":"Congés"},{"label":"JB","date":"2026-10-27","part":"M","note":"Congés"},{"label":"JB","date":"2026-10-27","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-27","part":"M","note":"Congés"},{"label":"AXC","date":"2026-10-27","part":"AM","note":"Congés"},{"label":"KS","date":"2026-10-27","part":"M","note":"Congés"},{"label":"KS","date":"2026-10-27","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-28","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-28","part":"AM","note":"Congés"},{"label":"MDP","date":"2026-10-28","part":"M","note":"Congés"},{"label":"MDP","date":"2026-10-28","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-28","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-28","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-28","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-28","part":"AM","note":"Congés"},{"label":"JB","date":"2026-10-28","part":"M","note":"Congés"},{"label":"JB","date":"2026-10-28","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-28","part":"M","note":"Congés"},{"label":"AXC","date":"2026-10-28","part":"AM","note":"Congés"},{"label":"KS","date":"2026-10-28","part":"M","note":"Congés"},{"label":"KS","date":"2026-10-28","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-28","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-28","part":"AM","note":"Congés"},{"label":"AR","date":"2026-10-29","part":"M","note":"Congés"},{"label":"AR","date":"2026-10-29","part":"AM","note":"Congés"},{"label":"TT","date":"2026-10-29","part":"M","note":"Congés"},{"label":"TT","date":"2026-10-29","part":"AM","note":"Congés"},{"label":"LOM","date":"2026-10-29","part":"M","note":"Congés"},{"label":"LOM","date":"2026-10-29","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-29","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-29","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-29","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-29","part":"AM","note":"Congés"},{"label":"JB","date":"2026-10-29","part":"M","note":"Congés"},{"label":"JB","date":"2026-10-29","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-29","part":"M","note":"Congés"},{"label":"AXC","date":"2026-10-29","part":"AM","note":"Congés"},{"label":"KS","date":"2026-10-29","part":"M","note":"Congés"},{"label":"KS","date":"2026-10-29","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-29","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-29","part":"AM","note":"Congés"},{"label":"SG","date":"2026-10-30","part":"M","note":"Congés"},{"label":"SG","date":"2026-10-30","part":"AM","note":"Congés"},{"label":"BM","date":"2026-10-30","part":"M","note":"Congés"},{"label":"BM","date":"2026-10-30","part":"AM","note":"Congés"},{"label":"BV","date":"2026-10-30","part":"M","note":"Congés"},{"label":"BV","date":"2026-10-30","part":"AM","note":"Congés"},{"label":"AYG","date":"2026-10-30","part":"M","note":"Congés"},{"label":"AYG","date":"2026-10-30","part":"AM","note":"Congés"},{"label":"SB","date":"2026-10-30","part":"M","note":"Congés"},{"label":"SB","date":"2026-10-30","part":"AM","note":"Congés"},{"label":"LH","date":"2026-10-30","part":"M","note":"Congés"},{"label":"LH","date":"2026-10-30","part":"AM","note":"Congés"},{"label":"JB","date":"2026-10-30","part":"M","note":"Congés"},{"label":"JB","date":"2026-10-30","part":"AM","note":"Congés"},{"label":"AXC","date":"2026-10-30","part":"M","note":"Congés"},{"label":"AXC","date":"2026-10-30","part":"AM","note":"Congés"},{"label":"KS","date":"2026-10-30","part":"M","note":"Congés"},{"label":"KS","date":"2026-10-30","part":"AM","note":"Congés"},{"label":"EB","date":"2026-10-30","part":"M","note":"Congés"},{"label":"EB","date":"2026-10-30","part":"AM","note":"Congés"}],"notes":[{"date":"2026-10-27","text":"MDP Bureau"},{"date":"2026-10-29","text":"MDP Bureau"},{"date":"2026-10-26","text":"Ne pas modifier le médecin : plage coro lundi apm"},{"date":"2026-10-28","text":"Ne pas modifier le médecin : plage supplémentaire pédiatrie mercredi matin si JB et SG présentes"},{"date":"2026-10-29","text":"Ne pas modifier le médecin : plage pédiatrie jeudi matin"},{"date":"2026-10-30","text":"Ne pas modifier le médecin : plage coro vendredi matin"},{"date":"2026-10-29","text":"Ne pas modifier le médecin : plage IRM cardiaque jeudi apm"},{"date":"2026-10-30","text":"Ne pas modifier le médecin : bloc séno vendredi matin"},{"date":"2026-10-29","text":"Ne pas modifier le médecin : plage arthro en salle interv. Jeudi matin"}]}]};
+  let notesBy = {}, seedState = null, trameLoaded = false, seeding = false, gDay = -1, overrides = {}, ed = {poste:'', date:'', part:'M'}; const oChains = {};
 
   function normalizeTrame(v){
     if (!v || typeof v !== 'object') return null;
@@ -929,7 +1097,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
     const dow = (parse(k).getDay()+6)%7; if (dow > 4) return null;
     const c = trame.cases[tk(postId,dow,part)] || null;
     const ov = overrides[k] && overrides[k][postId+'_'+part] || null;
-    if (!c && !(ov && ov.w.length)) return null;
+    if (!c && !(ov && (ov.w.length || ov.x))) return null;
     const who = ov ? ov.w.slice() : (Array.isArray(c.who) ? c.who.slice() : []);
     Object.values(swaps).filter(x=>x.status === 'conclu' && (!ov || (x.updatedAt||0) > ov.t)).sort((a,b)=>(a.updatedAt||0)-(b.updatedAt||0)).forEach(x=>{
       if (x.poste === postId && x.date === k && x.part === part) {
@@ -941,7 +1109,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
         if (!who.includes(x.from)) who.push(x.from);
       }
     });
-    return {who, ou: ov ? false : !!(c && c.ou), texte: !ov && c && typeof c.texte === 'string' ? c.texte : '', edited: !!ov, open: !!ov && !who.length};
+    return {who, stars: ov && ov.s ? ov.s : [], ou: ov ? false : !!(c && c.ou), texte: ov ? (ov.x || '') : (c && typeof c.texte === 'string' ? c.texte : ''), edited: !!(ov && c), open: !!ov && !who.length && !ov.x};
   }
   /* pourquoi id ne peut pas être sur ce créneau ('' si tout va bien) */
   function reasonFor(id, date, part){
@@ -998,6 +1166,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
     const w = vacWho(v.poste, v.date, v.part);
     return !!(w && w.who.includes(id));
   }
+  const starOf = (v,id) => v && v.stars && v.stars.includes(id) ? '*' : '';
   const vacVal = v => v.poste+'|'+v.date+'|'+v.part;
   const parseVac = s => { if (!s) return null; const a = s.split('|'); return a.length === 3 ? {poste:a[0], date:a[1], part:a[2]} : null; };
   const vacLabel = v => fmtShort.format(parse(v.date))+' · '+(PART_TXT[v.part]||v.part)+' · '+postName(v.poste, v.date);
@@ -1013,7 +1182,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
   }
 
   /* ---------- vue Trame ---------- */
-  function renderTrame(){ renderTrameCore(); renderCreate(); }
+  function renderTrame(){ renderTrameCore(); renderGNotes(); renderCreate(); }
   function renderTrameCore(){
     const keys = [...Array(5)].map((_,i)=>addDays(weekStart,i));
     const wrap = $('#trameWrap');
@@ -1039,7 +1208,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
           const v = vs[ix]; let cfl = false, inner = '';
           if (v) {
             inner = v.texte ? '<span class="ch">'+esc(v.texte)+'</span>' : '';
-            inner += v.who.map(id=>{ const r = v.ou ? '' : reasonFor(id,dk,part); if (r) cfl = true; return '<span class="ch'+(id === me ? ' me' : '')+(r ? ' bad' : '')+'"'+chipSty(id, r)+'>'+(r ? '⚠ ' : '')+esc(dLabel(id))+(r ? ' · '+esc(r) : '')+'</span>'; }).join(v.ou ? ' ou ' : '');
+            inner += v.who.map(id=>{ const r = v.ou ? '' : reasonFor(id,dk,part); if (r) cfl = true; return '<span class="ch'+(id === me ? ' me' : '')+(r ? ' bad' : '')+'"'+chipSty(id, r)+'>'+(r ? '⚠ ' : '')+esc(dLabel(id)+starOf(v,id))+(r ? ' · '+esc(r) : '')+'</span>'; }).join(v.ou ? ' ou ' : '');
             if (v.open) inner += '<span class="cap open">à pourvoir</span>';
             if (v.edited) inner += '<span class="cap mod">modifié pour ce jour</span>';
           } else inner = '<span class="muted">—</span>';
@@ -1075,7 +1244,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
           let cfl = false;
           inner += v.who.map(id=>{
             const r = v.ou ? '' : reasonFor(id,k,part); if (r) cfl = true;
-            return '<span class="ch'+(id === me ? ' me' : '')+(r ? ' bad' : '')+'"'+chipSty(id, r)+(r ? ' title="'+esc(dLabel(id)+' : '+r)+'"' : '')+'>'+(r ? '⚠ ' : '')+esc(dLabel(id))+'</span>';
+            return '<span class="ch'+(id === me ? ' me' : '')+(r ? ' bad' : '')+'"'+chipSty(id, r)+(r ? ' title="'+esc(dLabel(id)+' : '+r)+'"' : '')+'>'+(r ? '⚠ ' : '')+esc(dLabel(id)+starOf(v,id))+'</span>';
           }).join(v.ou ? ' ou ' : '');
           if (v.open) inner += '<span class="cap open">à pourvoir</span>';
           if (p.variante) inner += '<span class="cap'+(vv !== p.variante ? ' alt' : '')+'">'+esc(ABREV[vv] || vv)+'</span>';
@@ -1085,10 +1254,10 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
       });
       h += '</tr>';
     });
-    h += '<tr><th class="who" scope="row">OFF</th>' + keys.map((d,i)=>PARTS.map(part=>{
+    h += (Object.keys(trame.off || {}).length ? '<tr><th class="who" scope="row">OFF</th>' + keys.map((d,i)=>PARTS.map(part=>{
       const l = trame.off[i+'_'+part];
       return '<td class="v'+(part === 'AM' ? ' end' : '')+'">'+(Array.isArray(l) ? l.map(id=>'<span class="ch off">'+esc(dLabel(id))+'</span>').join('') : '')+'</td>';
-    }).join('')).join('') + '</tr></tbody></table>';
+    }).join('')).join('') + '</tr>' : '') + '</tbody></table>';
     wrap.innerHTML = h;
     renderGAlert(); renderEditor();
   }
@@ -1097,52 +1266,58 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
   let cwStart = addDays(mondayOf(new Date()), 7), cwOpen = null, cwConfirm = false, cwTimer = 0;
   const whoOf = (p,k,part)=>{ const v = vacWho(p,k,part); return v ? v.who.slice() : []; };
   function renderCreate(){
-    const view = $('#view-creer');
-    if (!trame || !trame.postes.length) { $('#cwPostes').innerHTML = '<p class="empty">'+(loaded ? 'La trame du service n’est pas encore chargée.' : 'Chargement…')+'</p>'; $('#cwLabel').textContent = ''; return; }
+    if (!trame || !trame.postes.length) { $('#cwPostes').innerHTML = '<p class="empty">'+(loaded ? 'Les postes du service ne sont pas encore chargés.' : 'Chargement…')+'</p>'; $('#cwLabel').textContent = ''; return; }
     const days = [...Array(5)].map((_,i)=>addDays(cwStart,i)), keys = days.map(key);
     $('#cwLabel').textContent = fmtDM.format(days[0])+' – '+fmtDM.format(days[4])+' '+days[4].getFullYear();
     if (!cwOpen) cwOpen = new Set([trame.postes[0].id]);
     const docs = sortedDocs();
     const cfs = conflictsBetween(cwStart, days[4]);
-    let changed = 0;
-    keys.forEach(k=>{ if (overrides[k]) changed += Object.keys(overrides[k]).length; });
-    $('#cwStatus').textContent = changed ? changed+' vacation'+(changed > 1 ? 's' : '')+' modifiée'+(changed > 1 ? 's' : '')+' ou ajoutée'+(changed > 1 ? 's' : '')+' par rapport à la trame.' : 'Cette semaine suit exactement la trame.';
-    $('#cwReset').hidden = !changed;
-    $('#cwReset').textContent = cwConfirm ? 'Confirmer : tout remettre comme la trame' : 'Remettre la semaine comme la trame';
+    let total = 0, anyOv = false;
+    keys.forEach(k=>{
+      if (overrides[k] && Object.keys(overrides[k]).length) anyOv = true;
+      trame.postes.forEach(p=>{ if (p.info) return; (p.journee ? ['M'] : PARTS).forEach(part=>{ const v = vacWho(p.id,k,part); if (v && v.who.length) total++; }); });
+    });
+    $('#cwStatus').textContent = total ? total+' vacation'+(total > 1 ? 's' : '')+' avec médecin cette semaine.' : 'Semaine vide : importez le fichier Excel ou choisissez les médecins poste par poste.';
+    $('#cwReset').hidden = !anyOv;
+    $('#cwReset').textContent = cwConfirm ? 'Confirmer : vider toute la semaine' : 'Vider les vacations de la semaine';
     const al = $('#cwAlert');
     al.hidden = !cfs.length;
     al.innerHTML = cfs.length ? '<p><strong>⚠ '+cfs.length+' conflit'+(cfs.length > 1 ? 's' : '')+' sur cette semaine</strong></p><ul class="cf">'+cfs.slice(0,8).map(c=>'<li><span><strong>'+esc(dLabel(c.id))+'</strong> · '+esc(postName(c.poste,c.date))+', '+esc(fmtShort.format(parse(c.date)))+' '+PART_TXT[c.part]+' : '+esc(c.reason)+'</span></li>').join('')+'</ul>' : '';
 
     const opt = (id,k,part)=>{ const r = reasonFor(id,k,part); return '<option value="'+esc(id)+'">'+esc(dLabel(id))+(r ? ' ⚠ '+esc(r) : '')+'</option>'; };
     $('#cwPostes').innerHTML = trame.postes.map(p=>{
-      const rows = [];
-      keys.forEach((k,i)=>PARTS.forEach(part=>{
-        const v = vacWho(p.id,k,part), ov = overrides[k] && overrides[k][p.id+'_'+part];
-        if (v || ov) rows.push({k, i, part, v, ov, inTrame: !!trame.cases[tk(p.id,i,part)]});
-      }));
-      const nbad = rows.reduce((n,r)=>n+(r.v && !r.v.ou ? r.v.who.filter(id=>reasonFor(id,r.k,r.part)).length : 0),0);
-      let b = '';
-      rows.forEach(r=>{
-        const who = r.v ? r.v.who : [], key3 = p.id+'|'+r.k+'|'+r.part;
-        const bad = who.filter(id=>!(r.v && r.v.ou) && reasonFor(id,r.k,r.part));
-        b += '<div class="cwr'+(bad.length ? ' cf' : '')+'"><div class="cwl"><b>'+esc(fmtShort.format(parse(r.k)))+'</b> · '+PART_TXT[r.part]+(p.variante ? ' · '+esc(variantOf(p,parse(r.k))) : '')
-          + (!r.inTrame ? ' <span class="tag ex">exceptionnelle</span>' : r.ov ? ' <span class="tag">modifiée</span>' : '')+'</div>'
-          + (r.v && r.v.ou ? '<p class="hint">Dans la trame : à confirmer ('+esc(r.v.who.map(dLabel).join(' ou '))+').</p>' : '')
-          + (r.v && r.v.texte ? '<p class="hint">Mention de la trame : « '+esc(r.v.texte)+' ».</p>' : '')
-          + '<div class="cww">'+who.map(id=>{ const rs = r.v && r.v.ou ? '' : reasonFor(id,r.k,r.part); return '<span class="ch'+(rs ? ' bad' : '')+'"'+chipSty(id, rs)+'>'+(rs ? '⚠ ' : '')+esc(dLabel(id))+'<button type="button" class="x" data-cwr="'+esc(key3+'|'+id)+'" aria-label="Retirer '+esc(dLabel(id))+'"'+(canWrite ? '' : ' disabled')+'>×</button></span>'; }).join('')
-          + '<select data-cwa="'+esc(key3)+'" aria-label="Ajouter un médecin"'+(canWrite ? '' : ' disabled')+'><option value="">+ Ajouter un médecin…</option>'+docs.filter(d=>!who.includes(d.id)).map(d=>opt(d.id,r.k,r.part)).join('')+'</select></div>'
-          + bad.map(id=>'<p class="cwm">⚠ '+esc(dLabel(id))+' : '+esc(reasonFor(id,r.k,r.part))+'</p>').join('')
-          + (r.v && r.v.open ? '<p class="cwm">Personne n’est affecté : à pourvoir.</p>' : '')
-          + (r.ov ? '<button type="button" class="cwv ghost" data-cwv="'+esc(key3)+'"'+(canWrite ? '' : ' disabled')+'>'+(r.inTrame ? 'Revenir à la trame' : 'Supprimer cette vacation')+'</button>' : '')
+      const parts = p.journee ? ['M'] : PARTS;
+      let b = '', filled = 0, nbad = 0;
+      keys.forEach((k,i)=>parts.forEach(part=>{
+        const v = vacWho(p.id,k,part), key3 = p.id+'|'+k+'|'+part;
+        const when = '<b>'+esc(fmtShort.format(parse(k)))+'</b> · '+(p.journee ? 'journée' : PART_TXT[part]);
+        const dis = canWrite ? '' : ' disabled';
+        if (p.info) {
+          b += '<div class="cwr"><div class="cwl">'+when+'</div><input type="text" data-cwx="'+esc(key3)+'" value="'+esc(v ? v.texte : '')+'" maxlength="80" placeholder="Texte libre (ex. IRM 1 ET 2)"'+dis+'></div>';
+          if (v && v.texte) filled++;
+          return;
+        }
+        if (!v || !(v.who.length || v.texte)) {
+          b += '<div class="cwr empty"><span class="cwl">'+when+'</span><select data-cwa="'+esc(key3)+'" aria-label="Ajouter un médecin, '+esc(p.label)+'"'+dis+'><option value="">+ Ajouter un médecin…</option>'+docs.map(d=>opt(d.id,k,part)).join('')+'</select></div>';
+          return;
+        }
+        filled++;
+        const bad = v.ou ? [] : v.who.filter(id=>reasonFor(id,k,part)); nbad += bad.length;
+        const ov = overrides[k] && overrides[k][p.id+'_'+part];
+        b += '<div class="cwr'+(bad.length ? ' cf' : '')+'"><div class="cwl">'+when+'</div>'
+          + (v.texte ? '<p class="hint">'+esc(v.texte)+'</p>' : '')
+          + '<div class="cww">'+v.who.map(id=>{ const rs = v.ou ? '' : reasonFor(id,k,part); return '<span class="ch'+(rs ? ' bad' : '')+'"'+chipSty(id, rs)+'>'+(rs ? '⚠ ' : '')+esc(dLabel(id)+starOf(v,id))+'<button type="button" class="x" data-cwr="'+esc(key3+'|'+id)+'" aria-label="Retirer '+esc(dLabel(id))+'"'+dis+'>×</button></span>'; }).join('')
+          + '<select data-cwa="'+esc(key3)+'" aria-label="Ajouter un médecin"'+dis+'><option value="">+ Ajouter un médecin…</option>'+docs.filter(d=>!v.who.includes(d.id)).map(d=>opt(d.id,k,part)).join('')+'</select></div>'
+          + bad.map(id=>'<p class="cwm">⚠ '+esc(dLabel(id))+' : '+esc(reasonFor(id,k,part))+'</p>').join('')
+          + (ov ? '<button type="button" class="cwv ghost" data-cwv="'+esc(key3)+'"'+dis+'>Effacer cette vacation</button>' : '')
           + '</div>';
-      });
-      if (!rows.length) b = '<p class="hint">Aucune vacation sur ce poste cette semaine. Utilisez « Ajouter une vacation exceptionnelle » plus bas.</p>';
-      return '<details class="cwp" style="--pc:'+posteColor(p.id)+'" data-cwp="'+esc(p.id)+'"'+(cwOpen.has(p.id) ? ' open' : '')+'><summary>'+esc(p.label)+(nbad ? ' <span class="badge red">'+nbad+'</span>' : '')+'<small>'+rows.length+' vacation'+(rows.length > 1 ? 's' : '')+'</small></summary><div class="cwb">'+b+'</div></details>';
+      }));
+      return '<details class="cwp" style="--pc:'+posteColor(p.id)+'" data-cwp="'+esc(p.id)+'"'+(cwOpen.has(p.id) ? ' open' : '')+'><summary>'+esc(p.label)+(nbad ? ' <span class="badge red">'+nbad+'</span>' : '')+'<small>'+filled+' rempli'+(filled > 1 ? 'es' : '')+'</small></summary><div class="cwb">'+b+'</div></details>';
     }).join('');
 
-    /* formulaire de vacation exceptionnelle : garde les choix en cours */
+    /* ajout rapide : garde les choix en cours */
     const pv = {p: $('#cxPoste').value, d: $('#cxDay').value, t: $('#cxPart').value, w: $('#cxWho').value};
-    $('#cxPoste').innerHTML = trame.postes.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.label)+'</option>').join('');
+    $('#cxPoste').innerHTML = trame.postes.filter(x=>!x.info).map(x=>'<option value="'+esc(x.id)+'">'+esc(x.label)+'</option>').join('');
     $('#cxDay').innerHTML = days.map(d=>'<option value="'+key(d)+'">'+esc(fmtShort.format(d))+'</option>').join('');
     $('#cxPart').innerHTML = PARTS.map(x=>'<option value="'+x+'">'+(x === 'M' ? 'Matin' : 'Après-midi')+'</option>').join('');
     if (findPost(pv.p)) $('#cxPoste').value = pv.p;
@@ -1152,7 +1327,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
     $('#cxWho').innerHTML = '<option value="">Choisir un médecin…</option>'+docs.map(d=>opt(d.id,cd,cp)).join('');
     if (docs.some(d=>d.id === pv.w)) $('#cxWho').value = pv.w;
     const exists = vacWho(cpo, cd, cp);
-    $('#cxNote').textContent = exists ? 'Cette vacation existe déjà ('+exists.who.map(dLabel).join(', ')+') : le médecin choisi y sera ajouté.' : 'Cette vacation n’existe pas dans la trame : elle sera créée pour ce jour.';
+    $('#cxNote').textContent = exists && exists.who.length ? 'Déjà sur cette vacation : '+exists.who.map(dLabel).join(', ')+'. Le médecin choisi sera ajouté.' : 'Aucun médecin sur cette vacation pour le moment.';
     applyRO();
   }
   $('#cwPrev').addEventListener('click',()=>{ cwStart = addDays(cwStart,-7); renderCreate(); });
@@ -1165,11 +1340,17 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
     if (!cur.includes(sel.value)) cur.push(sel.value);
     writeWho(a[0],a[1],a[2],cur,sel.value);
   });
+  $('#cwPostes').addEventListener('change', async e=>{
+    const inp = e.target.closest('input[data-cwx]'); if (!inp) return;
+    const a = inp.dataset.cwx.split('|');
+    const ok = await writeText(a[0], a[1], a[2], inp.value.trim());
+    if (ok) notify('Enregistré.');
+  });
   $('#cwPostes').addEventListener('click', async e=>{
     const rm = e.target.closest('[data-cwr]');
     if (rm) { const a = rm.dataset.cwr.split('|'); writeWho(a[0],a[1],a[2],whoOf(a[0],a[1],a[2]).filter(x=>x !== a[3]), null); return; }
     const rv = e.target.closest('[data-cwv]');
-    if (rv) { const a = rv.dataset.cwv.split('|'); const ok = await setOverride(a[1], a[0]+'_'+a[2], null); if (ok) notify('Vacation revenue à la trame.'); }
+    if (rv) { const a = rv.dataset.cwv.split('|'); const ok = await revertSlot(a[0], a[1], a[2]); if (ok) notify('Vacation effacée.'); }
   });
   ['cxPoste','cxDay','cxPart'].forEach(id=>$('#'+id).addEventListener('change', renderCreate));
   $('#cxWho').addEventListener('change', ()=>{});
@@ -1180,8 +1361,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
     const cur = whoOf(po,k,part);
     if (cur.includes(w)) return notify(dLabel(w)+' est déjà sur cette vacation.', true);
     cur.push(w);
-    const created = !vacWho(po,k,part);
-    writeWho(po,k,part,cur,w, created ? 'Vacation exceptionnelle ajoutée.' : 'Médecin ajouté à la vacation.');
+    writeWho(po,k,part,cur,w,'Médecin ajouté.');
     $('#cxWho').value = '';
   });
   $('#cwReset').addEventListener('click', async ()=>{
@@ -1192,7 +1372,7 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
       const k = key(addDays(cwStart,i)), o = overrides[k]; if (!o) continue;
       for (const kk of Object.keys(o)) { n++; okAll = (await setOverride(k, kk, null)) && okAll; }
     }
-    if (okAll) notify(n+' vacation'+(n > 1 ? 's' : '')+' remise'+(n > 1 ? 's' : '')+' comme la trame.');
+    if (okAll) notify('Semaine vidée ('+n+' vacation'+(n > 1 ? 's' : '')+' effacée'+(n > 1 ? 's' : '')+').');
     renderCreate();
   });
 
@@ -1272,72 +1452,103 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
     return {monday, cells, ignored};
   }
   let xlPlan = null;
-  function buildPlan(parsed){
-    const monday = parsed.monday || cwStart;
+  const PP = window.PlanningParser;
+  function planFromWeeks(weeks, ignored){
     const known = {}, fresh = {};
     sortedDocs().forEach(d=>{ known[normS(d.label)] = d.id; known[d.id] = d.id; });
-    const cells = parsed.cells.map(c=>{
-      const ids = [];
-      c.names.forEach(nm=>{
-        const n = normS(nm); let id = known[n] || known[slug(nm)];
-        if (!id) { id = slug(nm); if (!id) return; fresh[id] = fresh[id] || nm; }
-        if (!ids.includes(id)) ids.push(id);
-      });
-      return {poste: c.poste, day: c.day, part: c.part, ids};
-    });
-    return {monday, fromFile: !!parsed.monday, cells, fresh, ignored: [...new Set(parsed.ignored)]};
+    const idOf = label=>{ const n = normS(label); let id = known[n] || known[slug(label)]; if (!id) { id = slug(label); if (id) { fresh[id] = fresh[id] || label; known[n] = id; } } return id || null; };
+    weeks.forEach(w=>{ w.cells.forEach(c=>c.people.forEach(p=>{ p.id = idOf(p.label); })); w.absences.forEach(a=>{ a.id = idOf(a.label); }); });
+    return {weeks, fresh, ignored: ignored || []};
   }
   function renderPlan(){
     const box = $('#xlPreview');
     if (!xlPlan) { box.hidden = true; box.innerHTML = ''; return; }
-    const pl = xlPlan, filled = pl.cells.filter(c=>c.ids.length);
-    const fresh = Object.values(pl.fresh);
+    const pl = xlPlan, fresh = Object.values(pl.fresh);
+    const filled = pl.weeks.reduce((n,w)=>n+w.cells.filter(c=>c.people.length && !(findPost(c.poste) && findPost(c.poste).journee && c.part === 'AM')).length, 0);
     box.hidden = false;
-    box.innerHTML = '<div class="xlp"><strong>Aperçu · semaine du '+esc(fmtDM.format(pl.monday))+' '+pl.monday.getFullYear()+'</strong>'
-      + '<p class="hint" style="color:var(--ink)">'+(pl.fromFile ? 'Semaine lue dans le fichier.' : 'Aucune date dans le fichier : la semaine affichée ci-dessus est utilisée.')+'</p>'
-      + '<p><strong>'+filled.length+'</strong> vacation'+(filled.length > 1 ? 's' : '')+' avec médecin(s) lue'+(filled.length > 1 ? 's' : '')+'.</p>'
-      + '<ul>'+filled.slice(0,8).map(c=>'<li>'+esc(postName(c.poste, key(addDays(pl.monday,c.day))))+' · '+esc(DOW[c.day])+' '+(c.part === 'M' ? 'matin' : 'après-midi')+' : '+esc(c.ids.map(id=>pl.fresh[id] || dLabel(id)).join(', '))+'</li>').join('')+(filled.length > 8 ? '<li>et '+(filled.length-8)+' autre'+(filled.length-8 > 1 ? 's' : '')+'…</li>' : '')+'</ul>'
-      + (fresh.length ? '<p>Nouveaux médecins ajoutés à la liste : <strong>'+esc(fresh.join(', '))+'</strong></p>' : '')
-      + (pl.ignored.length ? '<p class="xw">Lignes ignorées (poste inconnu de la trame) : '+esc(pl.ignored.join(', '))+'</p>' : '')
-      + (!filled.length ? '<p class="xw">Aucun médecin trouvé dans le fichier. Vérifiez le format (voir le modèle).</p>' : '')
-      + '<div class="xa"><button type="button" class="primary" id="xlApply"'+(filled.length && canWrite ? '' : ' disabled')+'>Créer cette semaine</button><button type="button" class="ghost" id="xlCancel">Annuler</button></div></div>';
+    box.innerHTML = '<div class="xlp"><strong>Aperçu du fichier</strong>'
+      + '<ul>'+pl.weeks.map(w=>{ const a = parse(w.monday), b = addDays(a,4); const n = w.cells.filter(c=>c.people.length).length; return '<li>Semaine du '+esc(fmtDM.format(a))+' au '+esc(fmtDM.format(b))+' : '+n+' cases avec médecin, '+new Set(w.absences.map(x=>x.label+x.date)).size+' absences/congés, '+w.notes.length+' note'+(w.notes.length > 1 ? 's' : '')+'</li>'; }).join('')+'</ul>'
+      + (fresh.length ? '<p>Médecins ajoutés à la liste : <strong>'+esc(fresh.join(', '))+'</strong></p>' : '<p>Tous les noms existent déjà dans la liste.</p>')
+      + (pl.ignored.length ? '<p class="xw">Lignes ignorées (poste inconnu) : '+esc(pl.ignored.join(', '))+'</p>' : '')
+      + (!filled ? '<p class="xw">Aucun médecin trouvé dans le fichier.</p>' : '')
+      + '<p class="hint" style="color:var(--ink)">Les semaines déjà présentes sont remplacées. Vos gardes ne sont pas touchées.</p>'
+      + '<div class="xa"><button type="button" class="primary" id="xlApply"'+(filled && canWrite ? '' : ' disabled')+'>Importer '+pl.weeks.length+' semaine'+(pl.weeks.length > 1 ? 's' : '')+'</button><button type="button" class="ghost" id="xlCancel">Annuler</button></div></div>';
   }
   async function readFile(file){
     const X = window.XLSX;
     if (!X) return notify("La lecture des fichiers Excel n'est pas disponible dans cette vue.", true);
-    if (!trame || !trame.postes.length) return notify('La trame du service doit être chargée.', true);
+    if (!trame || !trame.postes.length) return notify('Les postes du service doivent être chargés.', true);
     try {
       const buf = await file.arrayBuffer();
       const wb = X.read(new Uint8Array(buf), {type:'array', cellDates:true});
-      let parsed = null;
-      for (const name of wb.SheetNames) {
-        const rows = X.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:'', raw:true});
-        parsed = parseGrid(rows) || parseFlat(rows);
-        if (parsed && parsed.cells.length) break;
+      let weeks = PP.parseWorkbook(X, wb), ignored = [];
+      if (!weeks.length) {
+        let parsed = null;
+        for (const name of wb.SheetNames) {
+          const rows = X.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:'', raw:true});
+          parsed = parseGrid(rows) || parseFlat(rows);
+          if (parsed && parsed.cells.length) break;
+        }
+        if (parsed) {
+          const mon = parsed.monday || cwStart; ignored = parsed.ignored;
+          weeks = [{monday: key(mon), dates: [0,1,2,3,4].map(i=>key(addDays(mon,i))), cells: parsed.cells.map(c=>({poste: c.poste, date: key(addDays(mon,c.day)), part: c.part, people: c.names.map(n=>({label: PP.personLabel(n), star: false})), x: ''})), absences: [], notes: []}];
+        }
       }
-      if (!parsed) { xlPlan = null; renderPlan(); return notify("Format non reconnu : il faut les jours (lundi…vendredi) en colonnes et les postes en lignes. Téléchargez le modèle.", true); }
-      xlPlan = buildPlan(parsed); renderPlan();
+      if (!weeks.length) { xlPlan = null; renderPlan(); return notify("Format non reconnu. Utilisez le fichier du planning du service ou le modèle.", true); }
+      xlPlan = planFromWeeks(weeks, ignored); renderPlan();
     } catch(e) { xlPlan = null; renderPlan(); notify('Fichier illisible. Utilisez un .xlsx ou .csv.', true); }
   }
-  async function applyPlan(){
-    const pl = xlPlan; if (!pl || !db || !canWrite) return;
-    const btn = $('#xlApply'); if (btn) btn.disabled = true;
+  /* écrit les semaines d'un plan : médecins, vacations, absences, notes */
+  async function applyWeeks(plan){
+    if (!db || !canWrite || !trame) return false;
+    const postIds = new Set(trame.postes.map(p=>p.id));
     try {
       let order = Math.max(0, ...Object.values(doctors).filter(d=>d.order !== 999).map(d=>d.order));
-      for (const id of Object.keys(pl.fresh)) { if (!doctors[id]) await db.doc('medecins/'+id).set({label: pl.fresh[id], order: ++order, days: {}}); }
-    } catch(e) { handleErr(e); return; }
-    let n = 0, okAll = true;
-    for (const c of pl.cells) {
-      const k = key(addDays(pl.monday, c.day)), kk = c.poste+'_'+c.part, ov = overrides[k] && overrides[k][kk];
-      const base = trame.cases[tk(c.poste, c.day, c.part)], bw = base && Array.isArray(base.who) ? base.who : [];
-      if (c.ids.length) {
-        const same = !ov && !(base && base.ou) && bw.length === c.ids.length && c.ids.every(id=>bw.includes(id));
-        if (same) continue;
-        okAll = (await setOverride(k, kk, {w: c.ids, t: Date.now()})) && okAll; n++;
-      } else if (ov) { okAll = (await setOverride(k, kk, null)) && okAll; n++; }
-    }
-    cwStart = pl.monday; xlPlan = null; renderPlan(); renderCreate();
-    if (okAll) notify('Semaine du '+fmtDM.format(pl.monday)+' créée : '+n+' vacation'+(n > 1 ? 's' : '')+' enregistrée'+(n > 1 ? 's' : '')+'.');
+      for (const id of Object.keys(plan.fresh).sort((a,b)=>plan.fresh[a].localeCompare(plan.fresh[b],'fr'))) {
+        const ref = db.doc('medecins/'+id), snap = await ref.get();
+        if (!snap.exists) await ref.set({label: plan.fresh[id], order: ++order, days: {}});
+      }
+      const abs = {};
+      for (const w of plan.weeks) {
+        const byDate = {}; w.dates.forEach(d=>{ byDate[d] = {}; });
+        w.cells.forEach(c=>{
+          if (!postIds.has(c.poste) || !byDate[c.date]) return;
+          const ids = c.people.map(p=>p.id).filter(Boolean);
+          if (!ids.length && !c.x) return;
+          const val = {w: ids, t: Date.now()}, st = c.people.filter(p=>p.star && p.id).map(p=>p.id);
+          if (st.length) val.s = st; if (c.x) val.x = c.x;
+          byDate[c.date][c.poste+'_'+c.part] = val;
+        });
+        for (const d of w.dates) {
+          const ref = db.doc('ajustements/'+d);
+          if (Object.keys(byDate[d]).length) await ref.set(byDate[d]);
+          else if (overrides[d] && Object.keys(overrides[d]).length) await ref.delete();
+          const items = w.notes.filter(n=>n.date === d).map(n=>n.text);
+          if (items.length) await db.doc('notes/'+d).set({items});
+          else if (notesBy[d] && notesBy[d].length) await db.doc('notes/'+d).delete();
+        }
+        w.absences.forEach(a=>{ if (!a.id) return; abs[a.id] = abs[a.id] || {}; abs[a.id][a.date] = abs[a.id][a.date] || {}; abs[a.id][a.date][a.part] = true; });
+      }
+      for (const id of Object.keys(abs)) {
+        const cur = (doctors[id] && doctors[id].days) || {}, patch = {};
+        Object.keys(abs[id]).forEach(d=>{
+          const c = cur[d]; if (c === 'G') return;
+          const p = abs[id][d]; if (c === 'J' || c === 'M') p.M = true; if (c === 'J' || c === 'AM') p.AM = true;
+          patch[d] = p.M && p.AM ? 'J' : p.M ? 'M' : 'AM';
+        });
+        if (Object.keys(patch).length) await db.doc('medecins/'+id).update({days: patch});
+      }
+      return true;
+    } catch(e) { handleErr(e); return false; }
+  }
+  async function applyPlan(){
+    const pl = xlPlan; if (!pl) return;
+    const btn = $('#xlApply'); if (btn) btn.disabled = true;
+    const ok = await applyWeeks(pl);
+    if (!ok) { renderPlan(); return; }
+    if (pl.weeks.length) cwStart = parse(pl.weeks[0].monday);
+    xlPlan = null; renderPlan(); renderCreate();
+    notify(pl.weeks.length+' semaine'+(pl.weeks.length > 1 ? 's' : '')+' importée'+(pl.weeks.length > 1 ? 's' : '')+'.');
   }
   async function downloadModel(){
     const X = window.XLSX;
@@ -1414,10 +1625,9 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
     $('#edAdd').innerHTML = '<option value="">Choisir un médecin…</option>' + docs.filter(d=>!cur.includes(d.id)).map(d=>opt(d.id,false)).join('');
     const p = findPost(ed.poste);
     const notes = [];
-    notes.push(v && v.edited ? 'Modifiée pour ce jour (la trame prévoyait autre chose).' : 'Selon la trame.');
     if (v && v.ou) notes.push('Case « ou » dans la trame : elle deviendra ferme si vous la modifiez.');
-    if (v && v.texte) notes.push('Mention de la trame : « '+v.texte+' ».');
-    $('#edState').textContent = postName(ed.poste, ed.date)+' · '+notes.join(' ');
+    if (v && v.texte) notes.push('Mention : « '+v.texte+' ».');
+    $('#edState').textContent = postName(ed.poste, ed.date)+(findPost(ed.poste) && findPost(ed.poste).journee ? ' (journée entière)' : '')+(notes.length ? ' · '+notes.join(' ') : '');
     const bad = cur.filter(id=>!(v && v.ou) && reasonFor(id, ed.date, ed.part));
     const box = $('#edMsg');
     box.hidden = !bad.length;
@@ -1441,12 +1651,30 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
     oChains[date] = run.catch(()=>{});
     return run.then(()=>true).catch(e=>{ handleErr(e); return false; });
   }
+  const slotParts = (poste, part) => { const p = findPost(poste); return p && p.journee ? PARTS : [part]; };
   async function writeWho(poste, date, part, arr, added, okMsg){
-    const ok = await setOverride(date, poste+'_'+part, {w: arr, t: Date.now()});
+    let ok = true;
+    for (const pt of slotParts(poste, part)) {
+      const ov = overrides[date] && overrides[date][poste+'_'+pt];
+      const val = {w: arr, t: Date.now()};
+      if (ov && ov.x) val.x = ov.x;
+      const st = ov && ov.s ? ov.s.filter(id=>arr.includes(id)) : []; if (st.length) val.s = st;
+      ok = (await setOverride(date, poste+'_'+pt, val)) && ok;
+    }
     if (!ok) { renderEditor(); renderCreate(); return; }
     const r = added ? reasonFor(added, date, part) : '';
     if (r) notify('⚠ '+dLabel(added)+' n’est pas disponible : '+r+', '+fmtShort.format(parse(date))+' '+PART_TXT[part]+'.', true);
     else notify(okMsg || 'Vacation modifiée.');
+  }
+  async function revertSlot(poste, date, part){
+    let ok = true;
+    for (const pt of slotParts(poste, part)) ok = (await setOverride(date, poste+'_'+pt, null)) && ok;
+    return ok;
+  }
+  async function writeText(poste, date, part, text){
+    let ok = true;
+    for (const pt of slotParts(poste, part)) ok = (await (text ? setOverride(date, poste+'_'+pt, {w: [], t: Date.now(), x: text}) : setOverride(date, poste+'_'+pt, null))) && ok;
+    return ok;
   }
   const commitWho = (arr, added)=>writeWho(ed.poste, ed.date, ed.part, arr, added);
   ['edPoste','edDay','edPart'].forEach(id=>$('#'+id).addEventListener('change', e=>{
@@ -1466,8 +1694,8 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
     commitWho(cur, val);
   });
   $('#edRevert').addEventListener('click', async ()=>{
-    const ok = await setOverride(ed.date, ed.poste+'_'+ed.part, null);
-    if (ok) notify('Vacation revenue à la trame.');
+    const ok = await revertSlot(ed.poste, ed.date, ed.part);
+    if (ok) notify('Vacation effacée.');
   });
   function gotoCell(poste, date, part){
     ed.poste = poste; ed.date = date; ed.part = part;
@@ -1724,6 +1952,21 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
   try { window.matchMedia('(max-width:700px)').addEventListener('change', ()=>renderTrame()); } catch(e) {}
   initHours();
 
+  /* ---------- premier chargement : planning d'octobre ---------- */
+  async function maybeSeed(){
+    if (seeding || !SEED || seedState !== 'absent' || !trameLoaded || !loaded || !db || !canWrite) return;
+    seeding = true;
+    try {
+      const t = {postes: PP.POSTES.map(p=>Object.assign({}, p)), cases: {}, off: {}, regles: []};
+      await db.doc('trame/semaine').set(t);
+      trame = normalizeTrame(t);
+      const plan = planFromWeeks(SEED.weeks, []);
+      const ok = await applyWeeks(plan);
+      if (ok) { await db.doc('meta/seed').set({at: Date.now(), v: 1}); seedState = 'done'; }
+    } catch(e) { handleErr(e); }
+    seeding = false; renderAll();
+  }
+
   /* ---------- démarrage ---------- */
   renderAll();
   (async function init(){
@@ -1758,15 +2001,21 @@ fieldset:disabled .filebtn{opacity:.5;cursor:not-allowed}
       snap.docs.forEach(s=>{
         if (!isDate(s.id)) return;
         const v = s.data() || {}, o = {};
-        Object.keys(v).forEach(k=>{ const x = v[k]; if (x && typeof x === 'object' && Array.isArray(x.w)) o[k] = {w: x.w.filter(y=>typeof y === 'string'), t: Number(x.t) || 0}; });
+        Object.keys(v).forEach(k=>{ const x = v[k]; if (x && typeof x === 'object' && Array.isArray(x.w)) o[k] = {w: x.w.filter(y=>typeof y === 'string'), t: Number(x.t) || 0, x: typeof x.x === 'string' ? x.x : '', s: Array.isArray(x.s) ? x.s.filter(y=>typeof y === 'string') : []}; });
         next[s.id] = o;
       });
       overrides = next; renderTrame(); renderConflicts(); renderMe(); renderSwapForm();
     }, err=>{});
     db.doc('trame/semaine').onSnapshot(s=>{
-      trame = s.exists ? normalizeTrame(s.data()) : null;
-      renderTrame(); renderConflicts(); renderSwaps(); renderSwapForm();
+      trame = s.exists ? normalizeTrame(s.data()) : null; trameLoaded = true;
+      renderTrame(); renderConflicts(); renderSwaps(); renderSwapForm(); renderAll(); maybeSeed();
     }, err=>{});
+    db.collection('notes').onSnapshot(snap=>{
+      const next = {};
+      snap.docs.forEach(s=>{ if (!isDate(s.id)) return; const v = s.data() || {}; if (Array.isArray(v.items)) next[s.id] = v.items.filter(t=>typeof t === 'string' && t); });
+      notesBy = next; renderGNotes(); renderToday();
+    }, err=>{});
+    db.doc('meta/seed').onSnapshot(s=>{ seedState = s.exists ? 'done' : 'absent'; maybeSeed(); }, err=>{});
   })();
 })();
 </script>
@@ -1789,7 +2038,6 @@ const db = {
       update: d => setDoc(ref, d, { merge: true }),
       delete: () => deleteDoc(ref),
       onSnapshot: (next, err) => onSnapshot(ref, s => {
-        if (path === 'trame/semaine' && !s.exists() && !seeded) { seeded = true; setDoc(ref, TRAME).catch(() => {}); }
         next(wrap(s));
       }, err)
     };
